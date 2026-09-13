@@ -12,7 +12,7 @@
 - 项目名称：西瓜课表-新装版。
 - 项目定位：面向西华大学学生的课程表应用。
 - 技术栈：Kotlin Multiplatform、Compose Multiplatform、Android Application、iOS Framework。
-- 主模块：`composeApp`。
+- 共享模块：`composeApp`；Android 应用模块：`androidApp`。
 - 包名：`vip.mystery0.xhu.timetable`。
 - 构建系统：Gradle Kotlin DSL，使用版本目录 `gradle/libs.versions.toml`。
 - Java/Kotlin JVM 目标：JDK 21。
@@ -20,7 +20,8 @@
 ## 目录结构
 
 - `composeApp/src/commonMain`：跨平台共享代码、Compose UI、ViewModel、Repository、数据库、网络接口与资源。
-- `composeApp/src/androidMain`：Android 专属代码、资源、JNI/CMake 配置、WorkManager/Glance/MMKV 等平台实现。
+- `composeApp/src/androidMain`：Android 共享资源、actual、WorkManager/Glance/MMKV 等平台实现。
+- `androidApp/src/main`：Android Application、启动 Activity、Manifest、JNI/CMake 与应用资源；构建脚本负责渠道、签名及 APK 打包。
 - `composeApp/src/iosMain`：iOS 专属代码与平台实现。
 - `composeApp/src/iosSimulatorArm64Main`：iOS 模拟器相关实现。
 - `composeApp/schemas`：Room schema 输出目录。
@@ -146,10 +147,11 @@ Screen (Composable) <-> ViewModel (extends ComposeViewModel)
 
 ## 资源与本地化
 
-- Android 资源位于 `composeApp/src/androidMain/res` 和 `composeApp/src/main`。
+- Android 共享资源位于 `composeApp/src/androidMain/res`，应用资源位于 `androidApp/src/main/res`。
 - Compose Multiplatform 资源位于 `composeApp/src/commonMain/composeResources`。
 - 当前 Android locale filter 仅包含 `zh-rCN`；新增文案时保持中文语境一致。
-- 修改应用名称、版本显示、图标背景色等发布相关资源时，检查 `composeApp/build.gradle.kts` 中 debug/release/product flavor 的差异。
+- 修改应用名称、版本显示、图标背景色等发布相关资源时，检查 `androidApp/build.gradle.kts` 中 debug/release/product flavor 的差异。
+- `composeApp` 使用 `com.android.kotlin.multiplatform.library`，不声明应用渠道或 BuildConfig；宿主通过 `AndroidAppConfiguration` 提供构建配置。
 
 ## 产品渠道与版本号
 
@@ -168,8 +170,8 @@ Screen (Composable) <-> ViewModel (extends ComposeViewModel)
 常用命令：
 
 ```shell
-./gradlew composeApp:assembleDebug
-./gradlew composeApp:compileKotlinAndroid
+./gradlew androidApp:assembleDebug
+./gradlew composeApp:compileAndroidMain
 ./gradlew composeApp:exportLibraryDefinitions
 ./gradlew composeApp:updateAppleBuildVersion
 ./gradlew assembleRelease
@@ -179,8 +181,8 @@ Screen (Composable) <-> ViewModel (extends ComposeViewModel)
 
 验证建议：
 
-- 普通 Kotlin/共享逻辑改动：至少运行 `./gradlew composeApp:compileKotlinAndroid`。
-- Android UI、资源、Manifest、BuildConfig 或依赖改动：运行 `./gradlew composeApp:assembleDebug`。
+- 普通 Kotlin/共享逻辑改动：至少运行 `./gradlew composeApp:compileAndroidMain`。
+- Android UI、资源、Manifest、BuildConfig 或依赖改动：运行 `./gradlew androidApp:assembleDebug`。
 - 影响发布、许可证、iOS 版本号或 KMP framework 的改动：参考 CI 顺序运行
   `composeApp:exportLibraryDefinitions`、`composeApp:updateAppleBuildVersion`，必要时再运行
   `assembleRelease`。
@@ -190,8 +192,8 @@ Screen (Composable) <-> ViewModel (extends ComposeViewModel)
 
 - Release 构建需要签名环境变量和签名文件。缺少签名信息时，优先使用 debug/compile 任务验证。
 - 发布构建可能需要在 `local.properties` 中配置签名相关变量，具体变量名参见 `signing.gradle`。
-- 私有 Maven 仓库 `vip.mystery0.sheets-compose-dialogs` 需要 `GITHUB_USERNAME` 和 `GITHUB_PASSWORD`
-  环境变量。依赖解析失败时先检查凭据，而不是修改依赖声明。
+- 私有 Maven 仓库 `vip.mystery0.sheets-compose-dialogs` 的 `GITHUB_USERNAME` 和 `GITHUB_PASSWORD`
+  分别优先读取根目录 `local.properties` 同名配置项，缺失或为空白时回退到环境变量。依赖解析失败时先检查凭据，而不是修改依赖声明；检查时不得输出凭据内容。
 - iOS 构建需要本机具备对应 Xcode/Kotlin Native 环境。
 
 ## CI 与发布相关
@@ -202,7 +204,7 @@ Screen (Composable) <-> ViewModel (extends ComposeViewModel)
   - `./gradlew composeApp:updateAppleBuildVersion`
   - `./gradlew assembleRelease`
 - `standard` flavor 启用更新检查，`store` flavor 禁用更新检查。
-- `assembleRelease` 输出目录在 `composeApp/build/outputs/apk/standard/release`。
+- `assembleRelease` 输出目录在 `androidApp/build/outputs/apk/standard/release`。
 
 ## 修改前检查清单
 

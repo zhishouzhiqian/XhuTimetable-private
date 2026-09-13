@@ -28,6 +28,14 @@ pluginManagement {
     }
 }
 
+// 本机配置优先，CI 等未提供本机配置的环境继续使用环境变量。
+val localProperties = java.util.Properties().apply {
+    val propertiesFile = file("local.properties")
+    if (propertiesFile.isFile) {
+        propertiesFile.inputStream().use { load(it) }
+    }
+}
+
 dependencyResolutionManagement {
     repositories {
         maven {
@@ -36,8 +44,12 @@ dependencyResolutionManagement {
                 includeGroup("vip.mystery0.sheets-compose-dialogs")
             }
             credentials {
-                setUsername(System.getenv("GITHUB_USERNAME"))
-                setPassword(System.getenv("GITHUB_PASSWORD"))
+                username = localProperties.getProperty("GITHUB_USERNAME")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: providers.environmentVariable("GITHUB_USERNAME").orNull
+                password = localProperties.getProperty("GITHUB_PASSWORD")
+                    ?.takeIf { it.isNotBlank() }
+                    ?: providers.environmentVariable("GITHUB_PASSWORD").orNull
             }
         }
         google {
@@ -58,3 +70,5 @@ dependencyResolutionManagement {
 }
 
 include(":composeApp")
+
+include(":androidApp")

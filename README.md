@@ -18,13 +18,25 @@ Compose这个全新的UI框架重写了一遍西瓜课表（对，我们似乎�
 
 ## 如何自行编译？
 
+项目分为 `composeApp`（KMP 共享库）、`androidApp`（Android 应用）和 `iosApp`（iOS 宿主）。Android Studio 运行配置请选择 `androidApp`。
+
+使用 JDK 21，可通过 `./gradlew androidApp:assembleDebug` 构建两个渠道的调试包。共享 Android 代码的编译任务为 `./gradlew composeApp:compileAndroidMain`。
+
+华为配置文件放在 `androidApp/agconnect-services.json`，调试配置放在 `androidApp/src/debug/agconnect-services.json`。已有工程迁移时从原 `composeApp` 对应路径复制，这些文件不应提交。
+
+私有 Maven 仓库的 `GITHUB_USERNAME`、`GITHUB_PASSWORD` 分别优先读取根目录 `local.properties` 中的同名配置项；缺失或为空白时回退到环境变量。凭据仅保存在本机配置或 CI 密钥中，不应提交。
+
 项目使用Gradle进行构建，因为Gradle脚本中绑定了签名信息，所以需要先拥有一个自己的签名（这一步就不明说了，如果你是Android开发，自然知道是什么意思，如果你只是一个普通人，没有必要去自行编译），然后在local.properties中设置相应的变量，查阅Gradle脚本可以得到具体的变量名称。
 准备工作（一个Android Studio、一个Android SDK、一个可靠的网络）做好之后，就可以通过以下命令进行自动编译和打包签名：
 ```shell
 ./gradlew composeApp:exportLibraryDefinitions
 ./gradlew assembleRelease
 ```
-编译的签名APK文件在 `app/build/outputs/apk/release` 中。
+编译的签名APK文件在 `androidApp/build/outputs/apk/standard/release` 中。
+
+商店渠道 APK 位于 `androidApp/build/outputs/apk/store/release`。签名配置仍从根目录 `local.properties` 或环境变量读取；相对签名路径继续以原 `composeApp` 目录为基准。
+
+共享模块已使用新的 Android KMP 插件。由于当前华为 AGConnect 插件仍依赖旧 Variant API，`gradle.properties` 通过 `android.newDsl.optOut=:androidApp` 仅为应用模块保留旧 DSL；升级到兼容新 API 的华为插件后应移除此项。该临时兼容配置不适用于 AGP 10。
 
 ## 想要贡献代码？
 欢迎之极，正常发PR就行了

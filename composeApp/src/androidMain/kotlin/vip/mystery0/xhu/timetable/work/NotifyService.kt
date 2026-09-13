@@ -15,7 +15,7 @@ import kotlinx.datetime.atTime
 import kotlinx.datetime.plus
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
-import vip.mystery0.xhu.timetable.R
+import vip.mystery0.xhu.timetable.shared.R
 import vip.mystery0.xhu.timetable.config.store.getConfigStore
 import vip.mystery0.xhu.timetable.ui.notification.NOTIFICATION_CHANNEL_ID_DEFAULT
 import vip.mystery0.xhu.timetable.ui.notification.NotificationId

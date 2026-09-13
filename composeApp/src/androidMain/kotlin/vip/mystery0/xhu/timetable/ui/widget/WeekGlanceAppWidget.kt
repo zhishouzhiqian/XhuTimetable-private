@@ -36,8 +36,8 @@ import androidx.glance.text.Text
 import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
 import androidx.glance.unit.FixedColorProvider
-import vip.mystery0.xhu.timetable.R
-import vip.mystery0.xhu.timetable.ui.activity.StartActivity
+import vip.mystery0.xhu.timetable.shared.R
+import vip.mystery0.xhu.timetable.androidAppConfiguration
 import vip.mystery0.xhu.timetable.ui.widget.callback.UpdateWeekCourseActionCallback
 import vip.mystery0.xhu.timetable.ui.widget.state.WeekCourseStateGlance
 import vip.mystery0.xhu.timetable.ui.widget.state.WeekGlanceStateDefinition
@@ -105,7 +105,7 @@ class WeekGlanceAppWidget : GlanceAppWidget() {
                     }
                     Spacer(modifier = GlanceModifier.padding(8.dp).defaultWeight())
                     Text(
-                        modifier = GlanceModifier.clickable(actionStartActivity<StartActivity>()),
+                        modifier = GlanceModifier.clickable(actionStartActivity(androidAppConfiguration.launcherActivity)),
                         text = "查看更多 >",
                         style = TextStyle(color = colors.onSurface),
                     )

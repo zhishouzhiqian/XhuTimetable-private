@@ -15,7 +15,7 @@ import kotlinx.datetime.format
 import kotlinx.datetime.plus
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.inject
-import vip.mystery0.xhu.timetable.R
+import vip.mystery0.xhu.timetable.shared.R
 import vip.mystery0.xhu.timetable.base.packageName
 import vip.mystery0.xhu.timetable.config.store.Formatter
 import vip.mystery0.xhu.timetable.model.TodayCourseView

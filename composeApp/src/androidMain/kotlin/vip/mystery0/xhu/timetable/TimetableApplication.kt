@@ -19,16 +19,20 @@ import vip.mystery0.xhu.timetable.module.moduleList
 @SuppressLint("StaticFieldLeak")
 internal lateinit var context: Context
 
-class Application : Application(), DefaultLifecycleObserver {
+abstract class TimetableApplication : Application(), DefaultLifecycleObserver {
+    protected abstract val appConfiguration: AndroidAppConfiguration
+
     override fun onCreate() {
         super<Application>.onCreate()
+        // 日志、依赖注入和功能开关初始化前，先接收宿主的渠道配置。
+        androidAppConfiguration = appConfiguration
         AppContext.apply { set(applicationContext) }
         context = this
         initLogger()
         initCoroutine()
         startKoin {
             logger(KermitKoinLogger(Logger.withTag("koin")))
-            androidContext(this@Application)
+            androidContext(this@TimetableApplication)
             modules(moduleList())
         }
         val root = context.filesDir.absolutePath + "/mmkv"

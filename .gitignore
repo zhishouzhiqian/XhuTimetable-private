@@ -28,3 +28,12 @@ captures
 /composeApp/store/release/
 composeApp/agconnect-services.json
 composeApp/src/debug/agconnect-services.json
+
+androidApp/mapping.txt
+androidApp/seeds.txt
+androidApp/unused.txt
+/androidApp/release/
+/androidApp/standard/release/
+/androidApp/store/release/
+androidApp/agconnect-services.json
+androidApp/src/debug/agconnect-services.json

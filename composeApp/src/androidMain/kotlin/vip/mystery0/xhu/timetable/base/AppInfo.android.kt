@@ -4,8 +4,7 @@ import android.annotation.SuppressLint
 import android.os.Build
 import android.os.SystemClock
 import android.provider.Settings
-import vip.mystery0.xhu.timetable.BuildConfig
-import vip.mystery0.xhu.timetable.R
+import vip.mystery0.xhu.timetable.androidAppConfiguration
 import vip.mystery0.xhu.timetable.context
 
 actual fun systemVersion(): String = "Android ${Build.VERSION.RELEASE}-${Build.VERSION.SDK_INT}"
@@ -38,18 +37,14 @@ private val publicDeviceId: String
         }
     }
 
-//应用名称
-private val appName: String
-    get() = context.getString(R.string.app_name)
-
 actual fun publicDeviceId(): String = "android-${publicDeviceId}"
 
-actual fun appName(): String = appName
+actual fun appName(): String = androidAppConfiguration.appName
 
-actual fun packageName(): String = BuildConfig.APPLICATION_ID
+actual fun packageName(): String = androidAppConfiguration.applicationId
 
-actual fun appVersionName(): String = BuildConfig.VERSION_NAME
+actual fun appVersionName(): String = androidAppConfiguration.versionName
 
-actual fun appVersionCode(): String = BuildConfig.VERSION_CODE.toString()
+actual fun appVersionCode(): String = androidAppConfiguration.versionCode.toString()
 
-actual fun appVersionCodeNumber(): Long = BuildConfig.VERSION_CODE.toLong()
+actual fun appVersionCodeNumber(): Long = androidAppConfiguration.versionCode

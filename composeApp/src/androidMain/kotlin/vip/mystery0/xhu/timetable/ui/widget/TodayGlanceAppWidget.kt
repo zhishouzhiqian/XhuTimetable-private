@@ -38,8 +38,8 @@ import androidx.glance.text.FontWeight
 import androidx.glance.text.Text
 import androidx.glance.text.TextAlign
 import androidx.glance.text.TextStyle
-import vip.mystery0.xhu.timetable.R
-import vip.mystery0.xhu.timetable.ui.activity.StartActivity
+import vip.mystery0.xhu.timetable.shared.R
+import vip.mystery0.xhu.timetable.androidAppConfiguration
 import vip.mystery0.xhu.timetable.ui.widget.callback.UpdateTodayCourseActionCallback
 import vip.mystery0.xhu.timetable.ui.widget.state.CourseGlance
 import vip.mystery0.xhu.timetable.ui.widget.state.TodayCourseStateGlance
@@ -99,7 +99,7 @@ class TodayGlanceAppWidget : GlanceAppWidget() {
                     }
                     Spacer(modifier = GlanceModifier.padding(8.dp).defaultWeight())
                     Text(
-                        modifier = GlanceModifier.clickable(actionStartActivity<StartActivity>()),
+                        modifier = GlanceModifier.clickable(actionStartActivity(androidAppConfiguration.launcherActivity)),
                         text = "查看更多 >",
                         style = TextStyle(color = colors.onSurface),
                     )
