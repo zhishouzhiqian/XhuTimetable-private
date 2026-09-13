@@ -58,6 +58,11 @@ object StartRepo : BaseDataRepo {
             customNowYear = Customisable.serverDetect(xhuStartTime.nowYear)
             customNowTerm = Customisable.serverDetect(xhuStartTime.nowTerm)
         }
+        val effectiveTermStartDate = getConfigStore { customTermStartDate }
+        logger.i(
+            "Term start date initialized: serverDate=${xhuStartTime.startDate}, " +
+                "effectiveDate=${effectiveTermStartDate.data}, custom=${effectiveTermStartDate.custom}"
+        )
         setCacheStore {
             splashList = clientInitResponse.splash
         }

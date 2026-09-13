@@ -145,6 +145,10 @@ class MainViewModel : ComposeViewModel() {
     val customUi: StateFlow<CustomUi> = _customUi
 
     init {
+        logger.i(
+            "Week header initialized: viewModel=${hashCode()}, today=${LocalDate.now()}, " +
+                "dateStart=${_dateStart.value}, weekday=${_dateStart.value.dayOfWeek.isoDayNumber}"
+        )
         viewModelScope.safeLaunch {
             loadFromConfig()
             val mainUser = UserStore.getMainUser()
@@ -404,6 +408,11 @@ class MainViewModel : ComposeViewModel() {
         _week.value = currentWeek
         val termStartDate = getConfigStore { termStartDate }
         _dateStart.value = termStartDate.plus(currentWeek.toLong() - 1, DateTimeUnit.WEEK)
+        logger.i(
+            "Week header loaded: viewModel=${hashCode()}, today=${LocalDate.now()}, " +
+                "termStartDate=$termStartDate, week=$currentWeek, dateStart=${_dateStart.value}, " +
+                "weekday=${_dateStart.value.dayOfWeek.isoDayNumber}"
+        )
 
         return currentWeek to loadFromCloud
     }
@@ -847,6 +856,11 @@ class MainViewModel : ComposeViewModel() {
             val colorMap = CourseColorRepo.getRawCourseColorList()
             loadCourseToTable(currentWeek, currentWeek, weekList, colorMap, true)
             _dateStart.value = termStartDate.plus(currentWeek.toLong() - 1, DateTimeUnit.WEEK)
+            logger.i(
+                "Week header changed: viewModel=${hashCode()}, today=${LocalDate.now()}, " +
+                    "termStartDate=$termStartDate, week=$currentWeek, dateStart=${_dateStart.value}, " +
+                    "weekday=${_dateStart.value.dayOfWeek.isoDayNumber}"
+            )
         }
     }
 }

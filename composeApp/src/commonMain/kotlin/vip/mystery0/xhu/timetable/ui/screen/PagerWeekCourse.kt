@@ -30,6 +30,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -48,6 +49,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.maxkeppeler.sheets.option.OptionDialog
+import co.touchlab.kermit.Logger
 import com.maxkeppeler.sheets.option.models.DisplayMode
 import com.maxkeppeler.sheets.option.models.Option
 import com.maxkeppeler.sheets.option.models.OptionConfig
@@ -135,6 +137,18 @@ val weekCourseContent: TabContent = @Composable {
                         .background(Color.Black.copy(0.2F))
                 ) {
                     val firstDay by viewModel.dateStart.collectAsState()
+                    // 对照状态写入日志，定位日期偏移发生在计算层还是界面层。
+                    LaunchedEffect(viewModel, firstDay, currentWeek) {
+                        val message = "Week header displayed: viewModel=${viewModel.hashCode()}, " +
+                            "today=${LocalDate.now()}, week=$currentWeek, dateStart=$firstDay, " +
+                            "weekday=${firstDay.dayOfWeek.isoDayNumber}, " +
+                            "stateDateStart=${viewModel.dateStart.value}"
+                        if (firstDay.dayOfWeek.isoDayNumber != 1) {
+                            Logger.w(message, tag = "WeekHeader")
+                        } else {
+                            Logger.i(message, tag = "WeekHeader")
+                        }
+                    }
                     Text(
                         text = "${firstDay.month.number.pad2()}\n月",
                         color = Color.White,
