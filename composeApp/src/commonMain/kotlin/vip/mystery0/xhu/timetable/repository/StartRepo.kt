@@ -24,6 +24,8 @@ import vip.mystery0.xhu.timetable.config.store.getConfigStore
 import vip.mystery0.xhu.timetable.config.store.setCacheStore
 import vip.mystery0.xhu.timetable.config.store.setConfigStore
 import vip.mystery0.xhu.timetable.enableUpdateCheck
+import vip.mystery0.xhu.timetable.model.TermStartChangeAlert
+import vip.mystery0.xhu.timetable.model.TermStartChangeDetector
 import vip.mystery0.xhu.timetable.model.request.ClientInitRequest
 import vip.mystery0.xhu.timetable.model.response.ClientVersion
 import vip.mystery0.xhu.timetable.model.response.TeamMemberResponse
@@ -44,6 +46,8 @@ object StartRepo : BaseDataRepo {
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
+    var pendingTermStartChangeAlert: TermStartChangeAlert? = null
+
     suspend fun init() {
         if (!isOnline) {
             localInit()
@@ -53,6 +57,18 @@ object StartRepo : BaseDataRepo {
             commonApi.clientInit(ClientInitRequest())
         } ?: return localInit()
         val xhuStartTime = clientInitResponse.xhuStartTime
+
+        val oldServerDate = getConfigStore { storedServerTermStartDate }
+        val currentCustomDate = getConfigStore { customTermStartDate }
+        val customStartDate = if (currentCustomDate.custom) currentCustomDate.data else null
+
+        pendingTermStartChangeAlert = TermStartChangeDetector.detect(
+            oldServerDate = oldServerDate,
+            newServerDate = xhuStartTime.startDate,
+            customStartDate = customStartDate,
+            pendingAlert = pendingTermStartChangeAlert,
+        )
+
         setConfigStore {
             customTermStartDate = Customisable.serverDetect(xhuStartTime.startDate)
             customNowYear = Customisable.serverDetect(xhuStartTime.nowYear)

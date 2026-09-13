@@ -55,6 +55,12 @@ class ConfigStore internal constructor() {
     private val termStartDateKey = "termStartDate"
     val termStartDate: LocalDate
         get() = customTermStartDate.data
+    val storedServerTermStartDate: LocalDate?
+        get() {
+            val value = Store.ConfigStore.getConfiguration(termStartDateKey, "")
+            if (value.isBlank()) return null
+            return runCatching { LocalDate.parse(value, Formatter.DATE) }.getOrNull()
+        }
     var customTermStartDate: Customisable<LocalDate>
         set(value) {
             if (!value.custom && value.data == LocalDate.MIN) {

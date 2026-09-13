@@ -11,9 +11,11 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LoadingIndicator
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.contentColorFor
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -35,6 +37,8 @@ import com.maxkeppeler.sheets.info.InfoDialog
 import com.maxkeppeler.sheets.info.models.InfoBody
 import com.maxkeppeler.sheets.info.models.InfoSelection
 import io.github.vinceglb.filekit.absolutePath
+import kotlinx.datetime.LocalDate
+import kotlinx.datetime.format
 import org.jetbrains.compose.resources.painterResource
 import org.koin.compose.viewmodel.koinViewModel
 import vip.mystery0.xhu.timetable.base.HandleErrorMessage
@@ -46,6 +50,8 @@ import vip.mystery0.xhu.timetable.ui.navigation.RouteLogin
 import vip.mystery0.xhu.timetable.ui.navigation.RouteMain
 import vip.mystery0.xhu.timetable.ui.navigation.RouteSplashImage
 import vip.mystery0.xhu.timetable.ui.navigation.replaceTo
+import vip.mystery0.xhu.timetable.utils.dateFormatter
+import vip.mystery0.xhu.timetable.utils.formatWeekString
 import vip.mystery0.xhu.timetable.viewmodel.StarterViewModel
 import xhutimetable.composeapp.generated.resources.Res
 import xhutimetable.composeapp.generated.resources.ic_app_icon_o
@@ -57,7 +63,6 @@ fun InitScreen() {
 
     val allowPrivacy by viewModel.allowPrivacy.collectAsState()
     val readyState by viewModel.readyState.collectAsState()
-    val isLoginState by viewModel.isLoginState.collectAsState()
 
     val useCaseState = rememberUseCaseState(
         visible = false,
@@ -139,8 +144,51 @@ fun InitScreen() {
             useCaseState.show()
         }
     }
-    if (!readyState.loading) {
-        if (!isLoginState) {
+    readyState.termStartChangeAlert?.let { alert ->
+        fun formatTermDate(date: LocalDate): String =
+            "${date.format(dateFormatter)}（${date.dayOfWeek.formatWeekString()}）"
+
+        AlertDialog(
+            onDismissRequest = {},
+            properties = DialogProperties(
+                dismissOnBackPress = false,
+                dismissOnClickOutside = false,
+            ),
+            title = {
+                Text(text = "开学时间已更新")
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(text = "旧云端日期：${formatTermDate(alert.oldServerDate)}")
+                    Text(text = "新云端日期：${formatTermDate(alert.newServerDate)}")
+                    Text(text = "当前自定义日期：${formatTermDate(alert.customDate)}")
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(text = "选择‘同步’，将清除自定义设置，恢复自动跟随服务端开学时间。选择‘不同步’，将保留当前自定义设置，继续按该日期计算教学周。")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.syncTermStartDate()
+                    }
+                ) {
+                    Text(text = "同步")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.keepCustomTermStartDate()
+                    }
+                ) {
+                    Text(text = "不同步")
+                }
+            },
+        )
+    }
+
+    if (readyState.canNavigate) {
+        if (!readyState.isLogin) {
             navController.replaceTo<RouteInit>(RouteLogin(false))
             return
         }
