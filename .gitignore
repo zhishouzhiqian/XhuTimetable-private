@@ -23,6 +23,8 @@ captures
 **/xcshareddata/WorkspaceSettings.xcsettings
 /iosApp/Pods/
 /iosApp/Configuration/Config.xcconfig
+/iosApp/Configuration/Version.xcconfig
+/iosApp/scripts/__pycache__/
 /composeApp/release/
 /composeApp/standard/release/
 /composeApp/store/release/

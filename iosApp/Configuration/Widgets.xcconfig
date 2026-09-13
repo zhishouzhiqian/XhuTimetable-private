@@ -1,0 +1,4 @@
+#include "Version.xcconfig"
+
+// 扩展仅共享版本号，不继承主应用的 JPush 头文件和链接参数。
+WIDGET_PROVISIONING_PROFILE = XhuTimetableWidgetsProfile

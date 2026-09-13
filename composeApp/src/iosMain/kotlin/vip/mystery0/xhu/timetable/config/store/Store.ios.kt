@@ -4,6 +4,7 @@ import com.russhwolf.settings.NSUserDefaultsSettings
 import com.russhwolf.settings.Settings
 import com.russhwolf.settings.set
 import vip.mystery0.xhu.timetable.utils.mapJson
+import vip.mystery0.xhu.timetable.widget.WidgetRefreshSignal
 
 private val CacheStore = NSUserDefaultsSettings.Factory().create("CacheStore")
 private val ConfigStore = NSUserDefaultsSettings.Factory().create("ConfigStore")
@@ -53,14 +54,24 @@ actual inline fun <reified T> Store.setValue(key: String, value: T) {
         }
         else -> throw IllegalArgumentException("Unsupported type")
     }
+    notifyWidgetStoreChanged()
 }
 
 actual fun Store.removeValue(key: String) {
     val settings = getSettings(id)
     settings.remove(key)
+    notifyWidgetStoreChanged()
 }
 
 actual fun Store.removeAllValue() {
     val settings = getSettings(id)
     settings.clear()
+    notifyWidgetStoreChanged()
+}
+
+/** 设置与账号写入后，使扩展中的旧快照失效。 */
+fun Store.notifyWidgetStoreChanged() {
+    if (this == Store.ConfigStore || this == Store.UserStore) {
+        WidgetRefreshSignal.request(invalidate = true)
+    }
 }

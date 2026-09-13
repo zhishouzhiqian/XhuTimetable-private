@@ -37,6 +37,7 @@ kotlin {
         androidResources {
             enable = true
         }
+        withHostTest {}
     }
 
     compilerOptions {
@@ -59,6 +60,9 @@ kotlin {
     }
     
     sourceSets {
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
         androidMain.dependencies {
             implementation(libs.androidx.core.ktx)
             implementation(libs.androidx.activity.compose)
@@ -196,6 +200,11 @@ aboutLibraries {
     }
 }
 
+// 将跨语言测试样本纳入缓存输出，CI 即使命中测试缓存也能读取样本。
+tasks.matching { it.name == "testAndroidHostTest" }.configureEach {
+    outputs.file(layout.buildDirectory.file("widget-tests/snapshot.json"))
+}
+
 // 同次构建请求导出许可证时，先生成清单再复制资源；普通构建仍可复用已有清单。
 tasks.matching { it.name == "copyNonXmlValueResourcesForCommonMain" }.configureEach {
     mustRunAfter(tasks.named("exportLibraryDefinitions"))
@@ -205,6 +214,7 @@ tasks.register("updateAppleBuildVersion") {
     doLast {
         val configTemplate = rootProject.file("iosApp/Configuration/Config.xcconfig.template")
         val config = rootProject.file("iosApp/Configuration/Config.xcconfig")
+        val versionConfig = rootProject.file("iosApp/Configuration/Version.xcconfig")
         val content = configTemplate.readText()
         val newContent = content
             .replace("{appVersionName}", appVersionName)
@@ -213,6 +223,9 @@ tasks.register("updateAppleBuildVersion") {
             .replace("{releasePushAppKey}", libs.versions.releasePushAppKey.get())
             .replace("{pushChannel}", libs.versions.pushChannel.get())
         config.writeText(newContent)
+        versionConfig.writeText(
+            "CURRENT_PROJECT_VERSION=$gitVersionCode\nMARKETING_VERSION=$appVersionName\n"
+        )
         println("Updated Config.xcconfig with version $appVersionName (Build $gitVersionCode)")
     }
 }

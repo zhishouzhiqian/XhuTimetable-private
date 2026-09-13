@@ -46,31 +46,37 @@ jobs:
           IOS_CERTIFICATE: ${{ secrets.IOS_CERTIFICATE }}
           IOS_CERTIFICATE_PASSWORD: ${{ secrets.IOS_CERTIFICATE_PASSWORD }}
           IOS_PROVISION_PROFILE: ${{ secrets.IOS_PROVISION_PROFILE }}
+          IOS_WIDGET_PROVISION_PROFILE: ${{ secrets.IOS_WIDGET_PROVISION_PROFILE }}
           IOS_KEYCHAIN_PASSWORD: ${{ secrets.IOS_KEYCHAIN_PASSWORD }}
+          EXPORT_PLIST: ${{ secrets.IOS_EXPORT_PRODUCTION }}
         run: |
-          # create variables
-          CERTIFICATE_PATH=${{ runner.temp }}/build_certificate.p12
-          PP_PATH=${{ runner.temp }}/XhuTimetableProfile.mobileprovision
-          KEYCHAIN_PATH=${{ runner.temp }}/app-signing.keychain-db
-          
-          # import certificate and provisioning profile from secrets
-          echo -n "$IOS_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
-          echo -n "$IOS_PROVISION_PROFILE" | base64 --decode -o $PP_PATH
-          uuid=`grep UUID -A1 -a $PP_PATH | grep -io "[-A-F0-9]\{36\}"`
-          echo "uuid=$uuid" >> $GITHUB_OUTPUT
-          
-          # create temporary keychain
-          security create-keychain -p "$IOS_KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-          security unlock-keychain -p "$IOS_KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          
-          # import certificate to keychain
-          security import $CERTIFICATE_PATH -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
-          security list-keychain -d user -s $KEYCHAIN_PATH
-          
-          # apply provisioning profile
-          mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
-          cp $PP_PATH ~/Library/MobileDevice/Provisioning\ Profiles/$uuid.mobileprovision
+          set -euo pipefail
+          : "${IOS_WIDGET_PROVISION_PROFILE:?Missing IOS_WIDGET_PROVISION_PROFILE secret}"
+          CERTIFICATE_PATH="$RUNNER_TEMP/build_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          printf '%s' "$IOS_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+          printf '%s' "$IOS_PROVISION_PROFILE" | base64 --decode > "$RUNNER_TEMP/app.mobileprovision"
+          printf '%s' "$IOS_WIDGET_PROVISION_PROFILE" | base64 --decode > "$RUNNER_TEMP/widget.mobileprovision"
+          printf '%s' "$EXPORT_PLIST" | base64 --decode > "$RUNNER_TEMP/ExportOptions.original.plist"
+          security cms -D -i "$RUNNER_TEMP/app.mobileprovision" > "$RUNNER_TEMP/app-profile.plist"
+          security cms -D -i "$RUNNER_TEMP/widget.mobileprovision" > "$RUNNER_TEMP/widget-profile.plist"
+          python3 iosApp/scripts/configure_signing.py \
+            --app-profile "$RUNNER_TEMP/app-profile.plist" \
+            --widget-profile "$RUNNER_TEMP/widget-profile.plist" \
+            --export-options "$RUNNER_TEMP/ExportOptions.original.plist" \
+            --output "$RUNNER_TEMP/ExportOptions.plist"
+          # 导入同一个证书，为每个 Target 安装各自的描述文件。
+          security create-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -P "$IOS_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN_PATH"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$IOS_KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+          security list-keychain -d user -s "$KEYCHAIN_PATH"
+          mkdir -p "$HOME/Library/MobileDevice/Provisioning Profiles"
+          for target in app widget; do
+            UUID=$(/usr/libexec/PlistBuddy -c 'Print UUID' "$RUNNER_TEMP/$target-profile.plist")
+            cp "$RUNNER_TEMP/$target.mobileprovision" "$HOME/Library/MobileDevice/Provisioning Profiles/$UUID.mobileprovision"
+          done
       - name: 缓存Xcode编译数据
         uses: actions/cache@v4
         with:
@@ -82,17 +88,24 @@ jobs:
         # Multiplatform 1.11.0 在 CMPLayoutRegion.o 中强引用 iOS 26 才有的
         # UIViewLayoutRegion 类，必须切到 Xcode 26.2 才能链接通过。
         run: sudo xcode-select -s /Applications/Xcode_26.2.app
+      - name: 验证小部件快照与签名配置
+        run: |
+          ./gradlew composeApp:testAndroidHostTest
+          python3 -m unittest discover -s iosApp/scripts -p 'test_*.py'
+          swiftc iosApp/WidgetShared/WidgetSnapshot.swift iosApp/WidgetTests/main.swift -o "$RUNNER_TEMP/widget-tests"
+          "$RUNNER_TEMP/widget-tests" composeApp/build/widget-tests/snapshot.json
+          plutil -lint iosApp/iosApp.xcodeproj/project.pbxproj
       - name: 构建iOS APP
+        env:
+          APP_PROFILE: ${{ steps.profile.outputs.app_uuid }}
+          WIDGET_PROFILE: ${{ steps.profile.outputs.widget_uuid }}
+          SIGNING_TEAM: ${{ steps.profile.outputs.team_id }}
         run: |
           cd ${{ env.MOBILE_DIRECTORY }}
-          xcodebuild PROVISIONING_PROFILE=${{ steps.profile.outputs.uuid }} -project ${{ env.XCODE_PROJECT }}.xcodeproj -scheme ${{ env.XCODE_PROJECT }} archive -archivePath "Actions" -configuration Release -arch arm64
+          xcodebuild APP_PROVISIONING_PROFILE="$APP_PROFILE" WIDGET_PROVISIONING_PROFILE="$WIDGET_PROFILE" DEVELOPMENT_TEAM="$SIGNING_TEAM" -project ${{ env.XCODE_PROJECT }}.xcodeproj -scheme ${{ env.XCODE_PROJECT }} archive -archivePath "Actions" -configuration Release -arch arm64
       - name: 导出ipa
-        env:
-          EXPORT_PLIST: ${{ secrets.IOS_EXPORT_PRODUCTION }}
         run: |
-          EXPORT_PLIST_PATH=${{ runner.temp }}/ExportOptions.plist
-          echo -n "$EXPORT_PLIST" | base64 --decode --output $EXPORT_PLIST_PATH
-          xcodebuild PROVISIONING_PROFILE=${{ steps.profile.outputs.uuid }} -exportArchive -archivePath ${{ env.MOBILE_DIRECTORY }}/Actions.xcarchive -exportOptionsPlist $EXPORT_PLIST_PATH -exportPath ${{ runner.temp }}/export
+          xcodebuild -exportArchive -archivePath ${{ env.MOBILE_DIRECTORY }}/Actions.xcarchive -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist" -exportPath "$RUNNER_TEMP/export"
       - name: 解密API密钥
         env:
           API_KEY_BASE64: ${{ secrets.IOS_APPSTORE_API_PRIVATE_KEY }}

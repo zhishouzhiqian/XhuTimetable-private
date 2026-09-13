@@ -10,6 +10,7 @@ import org.koin.core.component.inject
 import vip.mystery0.xhu.timetable.api.AggregationApi
 import vip.mystery0.xhu.timetable.base.BaseDataRepo
 import vip.mystery0.xhu.timetable.config.HINT_NETWORK
+import vip.mystery0.xhu.timetable.config.store.User
 import vip.mystery0.xhu.timetable.config.store.UserStore.withAutoLoginOnce
 import vip.mystery0.xhu.timetable.config.store.getConfigStore
 import vip.mystery0.xhu.timetable.model.PracticalCourseView
@@ -19,6 +20,7 @@ import vip.mystery0.xhu.timetable.model.WeekCourseView
 import vip.mystery0.xhu.timetable.model.response.CalendarWeekResponse
 import vip.mystery0.xhu.timetable.model.transfer.AggregationView
 import vip.mystery0.xhu.timetable.repository.local.AggregationLocalRepo
+import vip.mystery0.xhu.timetable.widget.WidgetRefreshSignal
 
 object AggregationRepo : BaseDataRepo {
     private val dateFormatter = LocalDate.Format {
@@ -36,13 +38,14 @@ object AggregationRepo : BaseDataRepo {
         forceLoadFromLocal: Boolean,
         showCustomCourse: Boolean,
         showCustomThing: Boolean,
+        users: List<User>? = null,
     ): AggregationView {
         checkForceLoadFromCloud(forceLoadFromCloud)
 
         val nowYear = getConfigStore { nowYear }
         val nowTerm = getConfigStore { nowTerm }
         val customAccountTitle = getConfigStore { customAccountTitle }
-        val userList = requestUserList()
+        val userList = users ?: requestUserList()
 
         val todayViewList = ArrayList<TodayCourseView>()
         val weekViewList = ArrayList<WeekCourseView>()
@@ -160,6 +163,9 @@ object AggregationRepo : BaseDataRepo {
                     practicalCourseList.add(PracticalCourseView.valueOf(course, user))
                 }
             }
+        }
+        if (loadFromCloud) {
+            WidgetRefreshSignal.request()
         }
         return AggregationView(
             todayViewList,
