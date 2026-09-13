@@ -77,7 +77,7 @@ class ConfigStore internal constructor() {
                 return Customisable(LocalDate.parse(value, Formatter.DATE), false)
             }
             // 默认值
-            return Customisable(LocalDate(2025, 9, 8), false)
+            return Customisable(LocalDate(2026, 9, 7), false)
         }
 
     //当前学年
