@@ -1,6 +1,7 @@
 package vip.mystery0.xhu.timetable.ui.screen
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +20,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.twotone.AccountCircle
 import androidx.compose.material.icons.twotone.Clear
 import androidx.compose.material.icons.twotone.Lock
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -27,6 +29,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -43,6 +46,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -60,6 +64,7 @@ import org.koin.compose.viewmodel.koinViewModel
 import vip.mystery0.xhu.timetable.base.appName
 import vip.mystery0.xhu.timetable.config.toast.showLongToast
 import vip.mystery0.xhu.timetable.config.toast.showShortToast
+import vip.mystery0.xhu.timetable.module.HELP_URL
 import vip.mystery0.xhu.timetable.module.PRIVACY_URL
 import vip.mystery0.xhu.timetable.ui.component.ShowProgressDialog
 import vip.mystery0.xhu.timetable.ui.navigation.LocalNavController
@@ -76,6 +81,7 @@ fun LoginScreen(fromAccountManager: Boolean) {
 
     val navController = LocalNavController.current
     val keyboardController = LocalSoftwareKeyboardController.current
+    val uriHandler = LocalUriHandler.current
 
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -84,6 +90,7 @@ fun LoginScreen(fromAccountManager: Boolean) {
     var usernameError by remember { mutableStateOf(false) }
     var passwordError by remember { mutableStateOf(false) }
     var checkedPrivacy by remember { mutableStateOf(fromAccountManager) }
+    var showHelpDialog by remember { mutableStateOf(false) }
 
     val xhuDialogState = rememberUseCaseState()
 
@@ -271,6 +278,16 @@ fun LoginScreen(fromAccountManager: Boolean) {
                     fontSize = 14.sp,
                 )
             }
+            if (loginState.lastErrorMessage.isNotBlank()) {
+                Text(
+                    text = loginState.lastErrorMessage,
+                    color = MaterialTheme.colorScheme.error,
+                    fontSize = 13.sp,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 4.dp, vertical = 4.dp),
+                )
+            }
             Spacer(
                 modifier = Modifier
                     .height(16.dp)
@@ -296,6 +313,7 @@ fun LoginScreen(fromAccountManager: Boolean) {
                 )
             }
             if (fromAccountManager) {
+                Spacer(modifier = Modifier.height(8.dp))
                 Button(
                     modifier = Modifier.fillMaxWidth(),
                     colors = ButtonDefaults.buttonColors(
@@ -312,6 +330,29 @@ fun LoginScreen(fromAccountManager: Boolean) {
                     )
                 }
             }
+            Spacer(modifier = Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.Center,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(
+                    onClick = {
+                        uriHandler.openUri(HELP_URL)
+                    }
+                ) {
+                    Text(
+                        text = "登录遇到问题？",
+                        color = MaterialTheme.colorScheme.outline,
+                        fontSize = 14.sp,
+                    )
+                    Text(
+                        text = "获取帮助与反馈",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 14.sp,
+                    )
+                }
+            }
         }
     }
     ShowProgressDialog(
@@ -320,12 +361,52 @@ fun LoginScreen(fromAccountManager: Boolean) {
         successText = if (loginState.success) "登录成功" else "",
         errorText = loginState.errorMessage,
     )
+    if (showHelpDialog) {
+        AlertDialog(
+            onDismissRequest = {
+                showHelpDialog = false
+                viewModel.dismissHelpDialog()
+            },
+            title = {
+                Text(text = "登录遇到困难？")
+            },
+            text = {
+                Text(text = "已连续尝试登录 3 次，仍未成功。你可以前往问题反馈页面，通过 QQ 群、邮件或留言联系我们。")
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        showHelpDialog = false
+                        viewModel.dismissHelpDialog()
+                    }
+                ) {
+                    Text(text = "继续尝试")
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        showHelpDialog = false
+                        viewModel.dismissHelpDialog()
+                        uriHandler.openUri(HELP_URL)
+                    }
+                ) {
+                    Text(text = "获取帮助")
+                }
+            },
+        )
+    }
     LaunchedEffect(loginState) {
         if (loginState.loading) {
             xhuDialogState.show()
         } else if (!loginState.success) {
-            delay(1500L)
-            xhuDialogState.hide()
+            if (loginState.errorMessage.isNotBlank()) {
+                delay(1500L)
+                xhuDialogState.hide()
+                if (loginState.showHelpDialog) {
+                    showHelpDialog = true
+                }
+            }
         }
         if (loginState.success) {
             showShortToast("登录成功，欢迎使用${appName()}！")

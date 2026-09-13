@@ -49,6 +49,7 @@ import vip.mystery0.xhu.timetable.config.ktor.PoemsPlugin
 import vip.mystery0.xhu.timetable.config.ktor.ServerApiPlugin
 
 const val PRIVACY_URL = "https://xgkb.mystery0.vip/privacy/index.html"
+const val HELP_URL = "https://blog.mystery0.vip/docs/xgkb/group"
 
 const val HTTP_CLIENT = "client"
 const val HTTP_CLIENT_POEMS = "poemsClient"
