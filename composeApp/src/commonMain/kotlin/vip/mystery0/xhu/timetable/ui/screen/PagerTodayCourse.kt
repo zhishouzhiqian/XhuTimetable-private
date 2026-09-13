@@ -184,7 +184,7 @@ private fun TodayPoemsSheet(
             },
             sheetState = sheetState,
         ) {
-            Column {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                 SelectionContainer(
                     modifier = Modifier.padding(
                         top = 8.dp,
