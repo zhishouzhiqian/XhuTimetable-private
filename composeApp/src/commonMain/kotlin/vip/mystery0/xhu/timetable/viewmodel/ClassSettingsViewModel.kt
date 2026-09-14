@@ -21,9 +21,11 @@ import vip.mystery0.xhu.timetable.config.store.setConfigStore
 import vip.mystery0.xhu.timetable.model.CampusInfo
 import vip.mystery0.xhu.timetable.model.event.EventType
 import vip.mystery0.xhu.timetable.module.desc
+import vip.mystery0.xhu.timetable.repository.StartRepo
 import vip.mystery0.xhu.timetable.repository.UserRepo
 import vip.mystery0.xhu.timetable.utils.MIN
 import vip.mystery0.xhu.timetable.utils.now
+import vip.mystery0.xhu.timetable.widget.WidgetRefreshSignal
 
 class ClassSettingsViewModel : ComposeViewModel() {
     private val _selectYearAndTermList = MutableStateFlow<List<String>>(emptyList())
@@ -39,6 +41,8 @@ class ClassSettingsViewModel : ComposeViewModel() {
     val showTomorrowCourseTimeData: StateFlow<LocalTime?> = _showTomorrowCourseTimeData
     private val _currentTermStartTime = MutableStateFlow(GlobalConfigStore.customTermStartDate)
     val currentTermStartTime: StateFlow<Customisable<LocalDate>> = _currentTermStartTime
+    private val _serverTermStartDate = MutableStateFlow(GlobalConfigStore.serverTermStartDate)
+    val serverTermStartDate: StateFlow<LocalDate> = _serverTermStartDate
     private val _showCustomCourseData = MutableStateFlow(false)
     val showCustomCourseData: StateFlow<Boolean> = _showCustomCourseData
     private val _showCustomThingData = MutableStateFlow(false)
@@ -55,6 +59,7 @@ class ClassSettingsViewModel : ComposeViewModel() {
             _showTomorrowCourseTimeData.value = getConfigStore { showTomorrowCourseTime }
             _showCustomCourseData.value = getConfigStore { showCustomCourseOnWeek }
             _showCustomThingData.value = getConfigStore { showCustomThing }
+            _serverTermStartDate.value = getConfigStore { serverTermStartDate }
 
             _selectYearAndTermList.value = withContext(Dispatchers.Default) {
                 val loggedUserList = UserStore.loggedUserList()
@@ -127,8 +132,11 @@ class ClassSettingsViewModel : ComposeViewModel() {
                 customTermStartDate =
                     if (custom) Customisable.custom(date) else Customisable.clearCustom(LocalDate.MIN)
             }
+            StartRepo.pendingTermStartChangeAlert = null
             _currentTermStartTime.value = getConfigStore { customTermStartDate }
+            _serverTermStartDate.value = getConfigStore { serverTermStartDate }
             EventBus.post(EventType.CHANGE_TERM_START_TIME)
+            WidgetRefreshSignal.request(invalidate = true)
         }
     }
 

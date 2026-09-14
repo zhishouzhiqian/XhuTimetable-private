@@ -29,6 +29,7 @@ import vip.mystery0.xhu.timetable.utils.MIN
 import vip.mystery0.xhu.timetable.utils.md5
 import vip.mystery0.xhu.timetable.utils.now
 import vip.mystery0.xhu.timetable.utils.sha1
+import vip.mystery0.xhu.timetable.widget.WidgetRefreshSignal
 import vip.mystery0.xhu.timetable.utils.sha256
 import kotlin.time.Clock
 
@@ -56,6 +57,7 @@ class StarterViewModel : ComposeViewModel(), KoinComponent {
             StartRepo.pendingTermStartChangeAlert = null
             _readyState.update { it.copy(termStartChangeAlert = null) }
             EventBus.post(EventType.CHANGE_TERM_START_TIME)
+            WidgetRefreshSignal.request(invalidate = true)
         }
     }
 

@@ -18,6 +18,7 @@ import vip.mystery0.xhu.timetable.base.BaseDataRepo
 import vip.mystery0.xhu.timetable.config.Customisable
 import vip.mystery0.xhu.timetable.config.coroutine.safeLaunch
 import vip.mystery0.xhu.timetable.config.coroutine.safeWithContext
+import vip.mystery0.xhu.timetable.config.store.GlobalCacheStore
 import vip.mystery0.xhu.timetable.config.store.MenuStore
 import vip.mystery0.xhu.timetable.config.store.getCacheStore
 import vip.mystery0.xhu.timetable.config.store.getConfigStore
@@ -46,7 +47,11 @@ object StartRepo : BaseDataRepo {
         onBufferOverflow = BufferOverflow.DROP_OLDEST,
     )
 
-    var pendingTermStartChangeAlert: TermStartChangeAlert? = null
+    var pendingTermStartChangeAlert: TermStartChangeAlert?
+        get() = GlobalCacheStore.pendingTermStartAlert
+        set(value) {
+            GlobalCacheStore.pendingTermStartAlert = value
+        }
 
     suspend fun init() {
         if (!isOnline) {

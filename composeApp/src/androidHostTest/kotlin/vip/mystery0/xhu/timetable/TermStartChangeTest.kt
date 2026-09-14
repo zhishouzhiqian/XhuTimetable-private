@@ -2,6 +2,7 @@ package vip.mystery0.xhu.timetable
 
 import kotlinx.datetime.LocalDate
 import kotlinx.datetime.format
+import kotlinx.serialization.json.Json
 import vip.mystery0.xhu.timetable.config.Customisable
 import vip.mystery0.xhu.timetable.model.TermStartChangeAlert
 import vip.mystery0.xhu.timetable.model.TermStartChangeDetector
@@ -9,6 +10,7 @@ import vip.mystery0.xhu.timetable.utils.MIN
 import vip.mystery0.xhu.timetable.utils.dateFormatter
 import vip.mystery0.xhu.timetable.utils.formatWeekString
 import vip.mystery0.xhu.timetable.viewmodel.ReadyState
+import vip.mystery0.xhu.timetable.widget.WidgetRefreshSignal
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -202,5 +204,83 @@ class TermStartChangeTest {
 
         val formatted = formatTermDate(LocalDate(2026, 9, 7))
         assertEquals("2026年09月07日（星期一）", formatted)
+    }
+
+    @Test
+    fun testAlertDateDifferenceAndDescription() {
+        // 10. 测试新旧云端与自定义开学时间的差值及自然语言描述
+        val alertPostpone7Days = TermStartChangeAlert(
+            oldServerDate = LocalDate(2026, 8, 31),
+            newServerDate = LocalDate(2026, 9, 7),
+            customDate = LocalDate(2026, 9, 14),
+        )
+        assertEquals(7L, alertPostpone7Days.serverDiffDays)
+        assertEquals("推迟 7天（1周）", alertPostpone7Days.serverChangeDescription)
+        assertEquals(7L, alertPostpone7Days.customDiffDays)
+        assertEquals("比新云端推迟 7天（1周）", alertPostpone7Days.customDiffDescription)
+
+        val alertAdvance3Days = TermStartChangeAlert(
+            oldServerDate = LocalDate(2026, 9, 7),
+            newServerDate = LocalDate(2026, 9, 4),
+            customDate = LocalDate(2026, 9, 4),
+        )
+        assertEquals(-3L, alertAdvance3Days.serverDiffDays)
+        assertEquals("提前 3天", alertAdvance3Days.serverChangeDescription)
+        assertEquals(0L, alertAdvance3Days.customDiffDays)
+        assertEquals("与新云端日期一致", alertAdvance3Days.customDiffDescription)
+
+        val alertPostpone10Days = TermStartChangeAlert(
+            oldServerDate = LocalDate(2026, 8, 31),
+            newServerDate = LocalDate(2026, 9, 10),
+            customDate = LocalDate(2026, 9, 7),
+        )
+        assertEquals(10L, alertPostpone10Days.serverDiffDays)
+        assertEquals("推迟 10天（1周3天）", alertPostpone10Days.serverChangeDescription)
+        assertEquals(-3L, alertPostpone10Days.customDiffDays)
+        assertEquals("比新云端提前 3天", alertPostpone10Days.customDiffDescription)
+    }
+
+    @Test
+    fun testCloudRollbackEliminatesPendingAlert() {
+        // 11. 测试云端变更撤回时自动清除 pendingAlert
+        val pending = TermStartChangeAlert(
+            oldServerDate = oldDate,
+            newServerDate = newDate,
+            customDate = customDate,
+        )
+        val rollbackAlert = TermStartChangeDetector.detect(
+            oldServerDate = newDate,
+            newServerDate = oldDate, // 服务端恢复为旧日期
+            customStartDate = customDate,
+            pendingAlert = pending,
+        )
+        assertNull(rollbackAlert, "服务端日期恢复到原始旧云端日期时，变更消除，不应再弹窗提醒")
+    }
+
+    @Test
+    fun testAlertSerializationAndDeserialization() {
+        // 12. 测试 TermStartChangeAlert 的 JSON 序列化和反序列化
+        val alert = TermStartChangeAlert(
+            oldServerDate = LocalDate(2026, 8, 31),
+            newServerDate = LocalDate(2026, 9, 7),
+            customDate = LocalDate(2026, 9, 14),
+        )
+        val json = Json { ignoreUnknownKeys = true }
+        val encoded = json.encodeToString(alert)
+        val decoded = json.decodeFromString<TermStartChangeAlert>(encoded)
+        assertEquals(alert, decoded)
+        assertEquals(alert.serverDiffDays, decoded.serverDiffDays)
+        assertEquals(alert.serverChangeDescription, decoded.serverChangeDescription)
+        assertEquals(alert.customDiffDescription, decoded.customDiffDescription)
+    }
+
+    @Test
+    fun testWidgetRefreshSignalContract() {
+        // 13. 测试开学时间同步触发的 WidgetRefreshSignal 行为
+        val before = WidgetRefreshSignal.changes.value.revision
+        WidgetRefreshSignal.request(invalidate = true)
+        val after = WidgetRefreshSignal.changes.value
+        assertEquals(before + 1, after.revision)
+        assertEquals(after.revision, after.invalidatedAt, "带 invalidate 的请求必须更新 invalidatedAt 为当前 revision")
     }
 }

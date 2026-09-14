@@ -9,6 +9,7 @@ import kotlinx.datetime.LocalDateTime
 import kotlinx.datetime.format
 import kotlinx.datetime.plus
 import kotlinx.serialization.json.Json
+import vip.mystery0.xhu.timetable.model.TermStartChangeAlert
 import vip.mystery0.xhu.timetable.model.response.Holiday
 import vip.mystery0.xhu.timetable.model.response.Splash
 import vip.mystery0.xhu.timetable.model.response.TeamMemberResponse
@@ -47,6 +48,25 @@ class CacheStore {
             }
         }
         get() = Store.CacheStore.getConfiguration(pushRegistrationIdKey, "")
+
+    //待处理的开学日期变更提醒
+    private val pendingTermStartAlertKey = "pendingTermStartAlert"
+    var pendingTermStartAlert: TermStartChangeAlert?
+        set(value) {
+            if (value == null) {
+                Store.CacheStore.removeConfiguration(pendingTermStartAlertKey)
+            } else {
+                Store.CacheStore.setConfiguration(
+                    pendingTermStartAlertKey,
+                    json.encodeToString(value)
+                )
+            }
+        }
+        get() {
+            val saveValue = Store.CacheStore.getConfiguration(pendingTermStartAlertKey, "")
+            if (saveValue.isBlank()) return null
+            return runCatching { json.decodeFromString<TermStartChangeAlert>(saveValue) }.getOrNull()
+        }
 
     //启动图
     private val splashListKey = "splashList"

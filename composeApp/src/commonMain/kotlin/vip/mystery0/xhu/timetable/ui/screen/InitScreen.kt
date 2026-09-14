@@ -9,11 +9,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.LoadingIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.contentColorFor
@@ -28,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.DialogProperties
@@ -50,6 +57,7 @@ import vip.mystery0.xhu.timetable.ui.navigation.RouteLogin
 import vip.mystery0.xhu.timetable.ui.navigation.RouteMain
 import vip.mystery0.xhu.timetable.ui.navigation.RouteSplashImage
 import vip.mystery0.xhu.timetable.ui.navigation.replaceTo
+import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
 import vip.mystery0.xhu.timetable.utils.dateFormatter
 import vip.mystery0.xhu.timetable.utils.formatWeekString
 import vip.mystery0.xhu.timetable.viewmodel.StarterViewModel
@@ -154,25 +162,80 @@ fun InitScreen() {
                 dismissOnBackPress = false,
                 dismissOnClickOutside = false,
             ),
+            icon = {
+                Icon(
+                    painter = XhuIcons.customStartTime,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            },
             title = {
-                Text(text = "开学时间已更新")
+                Text(
+                    text = "开学时间已更新",
+                    style = MaterialTheme.typography.titleLarge,
+                )
             },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(text = "旧云端日期：${formatTermDate(alert.oldServerDate)}")
-                    Text(text = "新云端日期：${formatTermDate(alert.newServerDate)}")
-                    Text(text = "当前自定义日期：${formatTermDate(alert.customDate)}")
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = "选择‘同步’，将清除自定义设置，恢复自动跟随服务端开学时间。选择‘不同步’，将保留当前自定义设置，继续按该日期计算教学周。")
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Text(
+                        text = "云端开学日期发生变更，与您当前自定义设置不一致：",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Surface(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(12.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Text(
+                                text = "最新云端：${formatTermDate(alert.newServerDate)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary,
+                            )
+                            Text(
+                                text = "原云端：${formatTermDate(alert.oldServerDate)}（较原云端 ${alert.serverChangeDescription}）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            HorizontalDivider(
+                                modifier = Modifier.padding(vertical = 2.dp),
+                                color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                            )
+                            Text(
+                                text = "当前自定义：${formatTermDate(alert.customDate)}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            )
+                            Text(
+                                text = "（${alert.customDiffDescription}）",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    Text(
+                        text = "选择“同步云端”将清除自定义设置，后续自动跟随学校安排；选择“保留自定义”将继续按当前设定的日期计算教学周。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             },
             confirmButton = {
-                TextButton(
+                Button(
                     onClick = {
                         viewModel.syncTermStartDate()
                     }
                 ) {
-                    Text(text = "同步")
+                    Text(text = "同步云端")
                 }
             },
             dismissButton = {
@@ -181,7 +244,7 @@ fun InitScreen() {
                         viewModel.keepCustomTermStartDate()
                     }
                 ) {
-                    Text(text = "不同步")
+                    Text(text = "保留自定义")
                 }
             },
         )

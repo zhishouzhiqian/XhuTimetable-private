@@ -39,6 +39,7 @@ import vip.mystery0.xhu.timetable.config.Customisable
 import vip.mystery0.xhu.timetable.config.store.ConfigStore
 import vip.mystery0.xhu.timetable.config.store.EventBus
 import vip.mystery0.xhu.timetable.model.CampusInfo
+import vip.mystery0.xhu.timetable.model.TermStartChangeAlert
 import vip.mystery0.xhu.timetable.model.event.EventType
 import vip.mystery0.xhu.timetable.ui.component.ShowSingleSelectDialog
 import vip.mystery0.xhu.timetable.ui.component.preference.ConfigSettingsCheckbox
@@ -69,6 +70,7 @@ fun ClassSettingsScreen() {
     val campusInfo by viewModel.campusInfo.collectAsState()
     val showTomorrowCourseTime by viewModel.showTomorrowCourseTimeData.collectAsState()
     val currentTermStartTime by viewModel.currentTermStartTime.collectAsState()
+    val serverTermStartDate by viewModel.serverTermStartDate.collectAsState()
     val showCustomCourse by viewModel.showCustomCourseData.collectAsState()
     val showCustomThing by viewModel.showCustomThingData.collectAsState()
     val showTomorrowCourseTimeState by viewModel.showTomorrowCourseTimeState.collectAsState()
@@ -195,9 +197,19 @@ fun ClassSettingsScreen() {
                     title = { Text(text = "更改开学时间") },
                     subtitle = {
                         val text = buildString {
-                            append("当前开学时间：")
-                            append(currentTermStartTime.data.format(dateFormatter))
-                            if (!currentTermStartTime.custom) {
+                            if (currentTermStartTime.custom) {
+                                append("当前设置：${currentTermStartTime.data.format(dateFormatter)}【已自定义】")
+                                appendLine()
+                                val diffDays =
+                                    currentTermStartTime.data.toEpochDays() - serverTermStartDate.toEpochDays()
+                                val diffText = when {
+                                    diffDays == 0L -> "（与云端一致）"
+                                    diffDays > 0L -> "（比云端推迟 ${TermStartChangeAlert.formatDaysDiff(diffDays, false)}）"
+                                    else -> "（比云端提前 ${TermStartChangeAlert.formatDaysDiff(-diffDays, false)}）"
+                                }
+                                append("云端最新：${serverTermStartDate.format(dateFormatter)}$diffText")
+                            } else {
+                                append("当前开学时间：${currentTermStartTime.data.format(dateFormatter)}")
                                 appendLine()
                                 append("【从云端自动获取】")
                             }
