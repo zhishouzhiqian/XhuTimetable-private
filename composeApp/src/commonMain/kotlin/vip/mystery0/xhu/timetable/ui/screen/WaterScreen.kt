@@ -21,6 +21,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
@@ -42,6 +43,7 @@ import androidx.compose.ui.unit.dp
 import org.koin.compose.viewmodel.koinViewModel
 import vip.mystery0.xhu.timetable.base.HandleErrorMessage
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
+import vip.mystery0.xhu.timetable.model.water.WaterDevice
 import vip.mystery0.xhu.timetable.model.water.WaterUiState
 import vip.mystery0.xhu.timetable.ui.navigation.LocalNavController
 import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
@@ -54,6 +56,7 @@ fun WaterScreen() {
     val navController = LocalNavController.current
     val uiState by viewModel.uiState.collectAsState()
     val credentials by viewModel.credentials.collectAsState()
+    val availableDevices by viewModel.availableDevices.collectAsState()
     val lastKnownRunning by viewModel.lastKnownRunning.collectAsState()
 
     var editing by remember { mutableStateOf(false) }
@@ -91,9 +94,15 @@ fun WaterScreen() {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Spacer(Modifier.height(24.dp))
-            if (editing || uiState == WaterUiState.NotBound) {
+            if (editing ||
+                credentials?.authenticated != true ||
+                credentials?.bound != true ||
+                uiState == WaterUiState.AuthExpired
+            ) {
                 WaterCredentialsForm(
                     credentials = credentials,
+                    availableDevices = availableDevices,
+                    uiState = uiState,
                     onSave = { openId, sessionId, posCode, orgId ->
                         if (viewModel.saveCredentials(openId, sessionId, posCode, orgId)) {
                             editing = false
@@ -101,6 +110,11 @@ fun WaterScreen() {
                     },
                     onCancel = if (credentials == null) null else ({ editing = false }),
                     onClear = if (credentials == null) null else ({ viewModel.clearCredentials() }),
+                    onRefreshDevices = viewModel::refreshDevices,
+                    onSelectDevice = {
+                        viewModel.selectDevice(it)
+                        editing = false
+                    },
                 )
             } else {
                 WaterControl(
@@ -151,9 +165,13 @@ fun WaterScreen() {
 @Composable
 private fun WaterCredentialsForm(
     credentials: WaterCredentials?,
+    availableDevices: List<WaterDevice>,
+    uiState: WaterUiState,
     onSave: (String, String, String, String) -> Unit,
     onCancel: (() -> Unit)?,
     onClear: (() -> Unit)?,
+    onRefreshDevices: () -> Unit,
+    onSelectDevice: (WaterDevice) -> Unit,
 ) {
     var openId by remember(credentials) { mutableStateOf(credentials?.openId.orEmpty()) }
     var sessionId by remember(credentials) { mutableStateOf(credentials?.sessionId.orEmpty()) }
@@ -167,16 +185,35 @@ private fun WaterCredentialsForm(
         tint = MaterialTheme.colorScheme.primary,
     )
     Text(
-        text = if (credentials == null) "配置用水服务" else "更新用水服务凭据",
+        text = if (credentials?.authenticated == true) "配置用水设备" else "配置用水服务",
         style = MaterialTheme.typography.headlineSmall,
     )
     Text(
-        text = "从你自己的 HTTPS 抓包中填写以下字段。应用不会包含任何预置账号或凭据；JSESSIONID 失效后需要重新填写。",
+        text = "当前抓包尚未包含登录和 Cookie 建立过程，请先从你自己的 HTTPS 抓包导入认证信息。openid 与 JSESSIONID 会保存到系统安全存储；设备号可由常用设备接口自动获取。",
         modifier = Modifier.padding(vertical = 12.dp),
         color = MaterialTheme.colorScheme.outline,
         textAlign = TextAlign.Center,
         style = MaterialTheme.typography.bodySmall,
     )
+    when (uiState) {
+        WaterUiState.AuthExpired -> Text(
+            text = "认证已失效，旧的 openid 与 JSESSIONID 已清除；设备信息仍保留。请重新导入认证信息。",
+            modifier = Modifier.padding(bottom = 12.dp),
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        is WaterUiState.Error -> Text(
+            text = uiState.message,
+            modifier = Modifier.padding(bottom = 12.dp),
+            color = MaterialTheme.colorScheme.error,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.bodySmall,
+        )
+
+        else -> Unit
+    }
     OutlinedTextField(
         value = openId,
         onValueChange = { openId = it.trim() },
@@ -203,6 +240,7 @@ private fun WaterCredentialsForm(
         },
         modifier = Modifier.fillMaxWidth(),
         label = { Text("6 位设备号") },
+        supportingText = { Text("可留空，保存认证信息后自动获取常用设备") },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         singleLine = true,
     )
@@ -221,7 +259,36 @@ private fun WaterCredentialsForm(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
     ) {
-        Text("保存配置")
+        Text(if (posCode.isBlank()) "保存并自动获取设备" else "保存配置")
+    }
+    if (credentials?.authenticated == true && credentials.orgId.isNotBlank()) {
+        OutlinedButton(
+            onClick = onRefreshDevices,
+            modifier = Modifier.fillMaxWidth(),
+            enabled = uiState != WaterUiState.Loading,
+            shape = RoundedCornerShape(24.dp),
+        ) {
+            if (uiState == WaterUiState.Loading) {
+                CircularProgressIndicator(modifier = Modifier.padding(4.dp))
+            } else {
+                Text("自动刷新常用设备")
+            }
+        }
+    }
+    if (availableDevices.size > 1) {
+        Text(
+            text = "找到多个常用设备，请确认后选择：",
+            modifier = Modifier.padding(top = 16.dp),
+            style = MaterialTheme.typography.bodySmall,
+        )
+        availableDevices.forEach { device ->
+            TextButton(
+                onClick = { onSelectDevice(device) },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(device.name.ifBlank { "设备 ${device.posCode}" })
+            }
+        }
     }
     onCancel?.let {
         TextButton(onClick = it, modifier = Modifier.fillMaxWidth()) {
@@ -242,11 +309,16 @@ private fun WaterControl(
     onCheckedChange: (Boolean) -> Unit,
     onUpdateCredentials: () -> Unit,
 ) {
-    val busy = uiState == WaterUiState.Starting || uiState == WaterUiState.Stopping
+    val busy = uiState == WaterUiState.Loading ||
+            uiState == WaterUiState.Authenticating ||
+            uiState == WaterUiState.Starting ||
+            uiState == WaterUiState.Stopping
     val authExpired = uiState == WaterUiState.AuthExpired
     val status = when (uiState) {
         WaterUiState.Loading -> "正在读取配置"
-        WaterUiState.NotBound -> "尚未配置"
+        WaterUiState.NotAuthenticated -> "尚未认证"
+        WaterUiState.Authenticating -> "正在认证"
+        WaterUiState.NotBound -> "尚未绑定设备"
         WaterUiState.Ready -> "已就绪"
         WaterUiState.Starting -> "正在开水"
         is WaterUiState.Running -> uiState.message
@@ -266,7 +338,9 @@ private fun WaterControl(
         text = status,
         modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
         color = when (uiState) {
-            WaterUiState.AuthExpired, is WaterUiState.Error -> MaterialTheme.colorScheme.error
+            WaterUiState.AuthExpired,
+            WaterUiState.NotAuthenticated,
+            is WaterUiState.Error -> MaterialTheme.colorScheme.error
             else -> MaterialTheme.colorScheme.outline
         },
     )
@@ -293,6 +367,8 @@ private fun WaterControl(
                     checked = running,
                     enabled = !authExpired &&
                             uiState != WaterUiState.Loading &&
+                            uiState != WaterUiState.Authenticating &&
+                            uiState != WaterUiState.NotAuthenticated &&
                             uiState != WaterUiState.NotBound,
                     onCheckedChange = onCheckedChange,
                 )
@@ -306,7 +382,7 @@ private fun WaterControl(
                 .fillMaxWidth()
                 .padding(top = 20.dp),
         ) {
-            Text("更新 JSESSIONID")
+            Text("重新导入认证信息")
         }
     }
     Text(

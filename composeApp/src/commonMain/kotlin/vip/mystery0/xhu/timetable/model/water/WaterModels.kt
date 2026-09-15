@@ -10,11 +10,14 @@ data class WaterCredentials(
     val posCode: String = "",
     val orgId: String = "2",
 ) {
+    val authenticated: Boolean
+        get() = openId.isNotBlank() && sessionId.isNotBlank()
+
+    val bound: Boolean
+        get() = posCode.matches(Regex("\\d{6}")) && orgId.isNotBlank()
+
     val configured: Boolean
-        get() = openId.isNotBlank() &&
-                sessionId.isNotBlank() &&
-                posCode.matches(Regex("\\d{6}")) &&
-                orgId.isNotBlank()
+        get() = authenticated && bound
 
     fun normalized(): WaterCredentials = copy(
         openId = openId.trim(),
@@ -37,6 +40,38 @@ data class WaterCommandRequest(
 )
 
 @Serializable
+data class WaterDeviceListRequest(
+    @SerialName("openid")
+    val openId: String,
+    @SerialName("orgid")
+    val orgId: String,
+)
+
+@Serializable
+data class WaterDeviceListResponse(
+    val success: Boolean = false,
+    val message: String = "",
+    val resultData: WaterDeviceListResultData? = null,
+)
+
+@Serializable
+data class WaterDeviceListResultData(
+    val result: String = "",
+    val message: String = "",
+    val data: List<WaterDevice> = emptyList(),
+)
+
+@Serializable
+data class WaterDevice(
+    @SerialName("poscode")
+    val posCode: String = "",
+    @SerialName("orgid")
+    val orgId: String = "",
+    @SerialName("posname")
+    val name: String = "",
+)
+
+@Serializable
 data class WaterCommandResponse(
     val success: Boolean = false,
     val message: String = "",
@@ -51,11 +86,23 @@ data class WaterResultData(
 
 sealed interface WaterUiState {
     data object Loading : WaterUiState
+    data object NotAuthenticated : WaterUiState
+    data object Authenticating : WaterUiState
     data object NotBound : WaterUiState
     data object Ready : WaterUiState
     data object Starting : WaterUiState
     data class Running(val message: String) : WaterUiState
     data object Stopping : WaterUiState
     data object AuthExpired : WaterUiState
-    data class Error(val message: String) : WaterUiState
+    data class Error(
+        val type: WaterErrorType,
+        val message: String,
+    ) : WaterUiState
+}
+
+enum class WaterErrorType {
+    Network,
+    Business,
+    MissingParameters,
+    UnknownResponse,
 }
