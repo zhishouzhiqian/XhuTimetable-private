@@ -8,6 +8,9 @@ enum WidgetSync {
     private static let logger = Logger(subsystem: "vip.mystery0.xhu.timetable", category: "WidgetSync")
 
     static func start() {
+#if PERSONAL_TEST_BUILD
+        return
+#else
         IosWidgetBridge.shared.start { json in
             do {
                 let data = Data(json.utf8)
@@ -25,6 +28,7 @@ enum WidgetSync {
                 logger.error("Failed to publish widget snapshot: \(error.localizedDescription, privacy: .public)")
             }
         }
+#endif
     }
 
     // 不在进入后台时注销：IO 线程中的登出可能稍后完成，仍需失效旧快照。

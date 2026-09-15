@@ -1,0 +1,112 @@
+name: Build iOS personal test IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/water-service
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-personal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-latest
+    timeout-minutes: 60
+    env:
+      GITHUB_USERNAME: ${{ secrets.NEXUS_USER }}
+      GITHUB_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Select Xcode 26.2
+        run: sudo xcode-select -s /Applications/Xcode_26.2.app
+
+      - name: Check private Maven credentials
+        shell: bash
+        run: |
+          if [[ -z "$GITHUB_USERNAME" || -z "$GITHUB_PASSWORD" ]]; then
+            echo "请在仓库 Actions secrets 中配置 NEXUS_USER 和 NEXUS_PASSWORD。" >&2
+            exit 1
+          fi
+
+      - name: Configure CI build
+        shell: bash
+        run: |
+          chmod a+x gradlew
+          mkdir -p "$HOME/.gradle"
+          printf '%s\n' 'org.gradle.configureondemand=true' >> "$HOME/.gradle/gradle.properties"
+
+          cp iosApp/Configuration/Config.xcconfig.template iosApp/Configuration/Config.xcconfig
+
+      - name: Update Apple build version
+        run: |
+          ./gradlew --configure-on-demand composeApp:exportLibraryDefinitions
+          ./gradlew --configure-on-demand composeApp:updateAppleBuildVersion
+
+      - name: Build unsigned device app
+        shell: bash
+        run: |
+          xcodebuild \
+            -project iosApp/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios-personal/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            CODE_SIGN_ENTITLEMENTS= \
+            DEVELOPMENT_TEAM= \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) PERSONAL_TEST_BUILD' \
+            build
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          APP_PATH="build/ios-personal/DerivedData/Build/Products/Debug-iphoneos/XhuTimetable.app"
+          if [[ -z "$APP_PATH" || ! -d "$APP_PATH" ]]; then
+            echo "没有找到 iOS .app 构建产物。" >&2
+            exit 1
+          fi
+
+          rm -rf "$APP_PATH/PlugIns"
+          rm -rf "$APP_PATH/_CodeSignature"
+          rm -f "$APP_PATH/embedded.mobileprovision"
+
+          mkdir -p build/ios-personal/Payload
+          cp -R "$APP_PATH" build/ios-personal/Payload/
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/ios-personal/Payload \
+            build/ios-personal/XhuTimetable-personal-unsigned.ipa
+
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: XhuTimetable-personal-unsigned-${{ github.run_number }}
+          path: build/ios-personal/XhuTimetable-personal-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7

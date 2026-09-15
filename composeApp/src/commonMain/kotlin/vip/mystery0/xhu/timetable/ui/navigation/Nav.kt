@@ -27,6 +27,7 @@ import vip.mystery0.xhu.timetable.ui.screen.SchoolCalendarScreen
 import vip.mystery0.xhu.timetable.ui.screen.SchoolTimetableScreen
 import vip.mystery0.xhu.timetable.ui.screen.SettingsScreen
 import vip.mystery0.xhu.timetable.ui.screen.SplashImageScreen
+import vip.mystery0.xhu.timetable.ui.screen.WaterScreen
 
 val LocalNavController = compositionLocalOf<NavController> { error("LocalNavController not provided") }
 
@@ -98,6 +99,9 @@ object RouteSchoolCalendar : Nav
 @Serializable
 object RouteSchoolTimetable : Nav
 
+@Serializable
+object RouteWater : Nav
+
 val Navs: NavGraphBuilder.() -> Unit = {
     composable<RouteLogin> { backStackEntry ->
         val login: RouteLogin = backStackEntry.toRoute()
@@ -126,6 +130,7 @@ val Navs: NavGraphBuilder.() -> Unit = {
     composable<RouteAbout> { AboutScreen() }
     composable<RouteSchoolCalendar> { SchoolCalendarScreen() }
     composable<RouteSchoolTimetable> { SchoolTimetableScreen() }
+    composable<RouteWater> { WaterScreen() }
 }
 
 inline fun <reified F : Any> NavController.replaceTo(target: Any) {

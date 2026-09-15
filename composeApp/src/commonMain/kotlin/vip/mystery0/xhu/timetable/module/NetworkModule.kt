@@ -44,6 +44,7 @@ import vip.mystery0.xhu.timetable.api.createPoemsApi
 import vip.mystery0.xhu.timetable.api.createScoreApi
 import vip.mystery0.xhu.timetable.api.createUrgeApi
 import vip.mystery0.xhu.timetable.api.createUserApi
+import vip.mystery0.xhu.timetable.api.createWaterApi
 import vip.mystery0.xhu.timetable.config.ktor.FileDownloadProgressState
 import vip.mystery0.xhu.timetable.config.ktor.PoemsPlugin
 import vip.mystery0.xhu.timetable.config.ktor.ServerApiPlugin
@@ -55,10 +56,12 @@ const val HTTP_CLIENT = "client"
 const val HTTP_CLIENT_POEMS = "poemsClient"
 const val HTTP_CLIENT_WS = "wsClient"
 const val HTTP_CLIENT_FILE = "fileClient"
+const val HTTP_CLIENT_WATER = "waterClient"
 
 const val RETROFIT = "retrofit"
 const val RETROFIT_POEMS = "poemsRetrofit"
 const val RETROFIT_WS = "wsRetrofit"
+const val RETROFIT_WATER = "waterRetrofit"
 
 private val json = Json {
     isLenient = true
@@ -137,6 +140,27 @@ val networkModule = module {
             }
         }
     }
+    single(named(HTTP_CLIENT_WATER)) {
+        HttpClient(httpClientEngine()) {
+            engine { httpClientEngineConfig(this, 20L) }
+            expectSuccess = true
+            install(HttpTimeout) {
+                requestTimeoutMillis = 20000L
+            }
+            install(ContentNegotiation) {
+                json(json)
+            }
+            install(DefaultRequest) {
+                header(HttpHeaders.ContentType, ContentType.Application.Json)
+            }
+            install(UserAgent) {
+                val userAgent = userAgent()
+                if (userAgent.isNotBlank()) {
+                    agent = userAgent
+                }
+            }
+        }
+    }
 
     single(named(RETROFIT)) {
         Ktorfit.Builder()
@@ -154,6 +178,12 @@ val networkModule = module {
         Ktorfit.Builder()
             .httpClient(get<HttpClient>(named(HTTP_CLIENT_WS)))
             .baseUrl("https://ws.api.mystery0.vip/")
+            .build()
+    }
+    single(named(RETROFIT_WATER)) {
+        Ktorfit.Builder()
+            .httpClient(get<HttpClient>(named(HTTP_CLIENT_WATER)))
+            .baseUrl("https://ecard.xhu.edu.cn/")
             .build()
     }
 
@@ -175,6 +205,7 @@ val networkModule = module {
 
     single { get<Ktorfit>(named(RETROFIT_POEMS)).createPoemsApi() }
     single { get<Ktorfit>(named(RETROFIT_WS)).createFeedbackApi() }
+    single { get<Ktorfit>(named(RETROFIT_WATER)).createWaterApi() }
 }
 
 expect fun httpClientEngine(): HttpClientEngineFactory<HttpClientEngineConfig>

@@ -55,6 +55,7 @@ import vip.mystery0.xhu.timetable.model.event.MenuNavigator
 import vip.mystery0.xhu.timetable.ui.component.TabContent
 import vip.mystery0.xhu.timetable.ui.component.TabTitle
 import vip.mystery0.xhu.timetable.ui.navigation.LocalNavController
+import vip.mystery0.xhu.timetable.ui.navigation.RouteWater
 import vip.mystery0.xhu.timetable.ui.theme.ProfileImages
 import vip.mystery0.xhu.timetable.ui.theme.XhuImages
 import vip.mystery0.xhu.timetable.viewmodel.MainViewModel
@@ -178,6 +179,18 @@ val profileCourseContent: TabContent = @Composable {
             modifier = Modifier
                 .fillMaxWidth()
                 .height(1.5.dp)
+                .background(MaterialTheme.colorScheme.outline)
+        )
+
+        BuildProfileItem(
+            painter = XhuIcons.Action.switch,
+            title = "宿舍用水",
+            click = { navController.navigate(RouteWater) },
+        )
+        HorizontalDivider(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
                 .background(MaterialTheme.colorScheme.outline)
         )
 
