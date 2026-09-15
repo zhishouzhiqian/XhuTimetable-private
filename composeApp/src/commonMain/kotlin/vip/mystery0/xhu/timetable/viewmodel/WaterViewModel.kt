@@ -96,6 +96,51 @@ class WaterViewModel(
         return true
     }
 
+    fun startAuthentication() {
+        if (_uiState.value.isBusy()) return
+        _uiState.value = WaterUiState.Authenticating
+    }
+
+    fun completeAuthentication(openId: String, sessionId: String) {
+        if (_uiState.value != WaterUiState.Authenticating) return
+        val current = _credentials.value ?: WaterCredentials(
+            openId = "",
+            sessionId = "",
+            posCode = "",
+            orgId = DEFAULT_ORG_ID,
+        )
+        val updated = current.copy(
+            openId = openId,
+            sessionId = sessionId,
+            orgId = current.orgId.ifBlank { DEFAULT_ORG_ID },
+        ).normalized()
+        if (!updated.authenticated) {
+            failAuthentication("官方认证未返回完整的用水凭据")
+            return
+        }
+        viewModelScope.safeLaunch(onException = {
+            handleRequestError(it)
+            true
+        }) {
+            WaterStore.saveCredentials(updated)
+            _credentials.value = updated
+            refreshDevicesInternal(updated)
+        }
+    }
+
+    fun cancelAuthentication() {
+        if (_uiState.value != WaterUiState.Authenticating) return
+        restoreCredentialState()
+    }
+
+    fun failAuthentication(message: String) {
+        if (_uiState.value != WaterUiState.Authenticating) return
+        _uiState.value = WaterUiState.Error(
+            WaterErrorType.UnknownResponse,
+            message.ifBlank { "官方认证页面加载失败" },
+        )
+    }
+
     fun refreshDevices() {
         val value = _credentials.value ?: run {
             _uiState.value = WaterUiState.NotAuthenticated
@@ -259,6 +304,16 @@ class WaterViewModel(
         return null
     }
 
+    private fun restoreCredentialState() {
+        val value = _credentials.value
+        _uiState.value = when {
+            value?.authenticated != true -> WaterUiState.NotAuthenticated
+            !value.bound -> WaterUiState.NotBound
+            _lastKnownRunning.value -> WaterUiState.Running("本机记录的上次状态为已开水")
+            else -> WaterUiState.Ready
+        }
+    }
+
     private fun clearExpiredAuthentication() {
         val value = _credentials.value
         viewModelScope.safeLaunch(onException = {
@@ -268,6 +323,10 @@ class WaterViewModel(
             WaterStore.clearAuthentication()
             _credentials.value = value?.copy(openId = "", sessionId = "")
         }
+    }
+
+    private companion object {
+        const val DEFAULT_ORG_ID = "2"
     }
 }
 

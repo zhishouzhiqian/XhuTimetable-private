@@ -85,46 +85,58 @@ fun WaterScreen() {
             )
         },
     ) { paddingValues ->
-        Column(
-            modifier = Modifier
-                .padding(paddingValues)
-                .padding(horizontal = 20.dp)
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Spacer(Modifier.height(24.dp))
-            if (editing ||
-                credentials?.authenticated != true ||
-                credentials?.bound != true ||
-                uiState == WaterUiState.AuthExpired
+        if (uiState == WaterUiState.Authenticating) {
+            WaterAuthenticationContent(
+                modifier = Modifier
+                    .padding(paddingValues)
+                    .fillMaxSize(),
+                onAuthenticated = viewModel::completeAuthentication,
+                onCancel = viewModel::cancelAuthentication,
+                onError = viewModel::failAuthentication,
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .padding(paddingValues)
+                    .padding(horizontal = 20.dp)
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                WaterCredentialsForm(
-                    credentials = credentials,
-                    availableDevices = availableDevices,
-                    uiState = uiState,
-                    onSave = { openId, sessionId, posCode, orgId ->
-                        if (viewModel.saveCredentials(openId, sessionId, posCode, orgId)) {
+                Spacer(Modifier.height(24.dp))
+                if (editing ||
+                    credentials?.authenticated != true ||
+                    credentials?.bound != true ||
+                    uiState == WaterUiState.AuthExpired
+                ) {
+                    WaterCredentialsForm(
+                        credentials = credentials,
+                        availableDevices = availableDevices,
+                        uiState = uiState,
+                        onSave = { openId, sessionId, posCode, orgId ->
+                            if (viewModel.saveCredentials(openId, sessionId, posCode, orgId)) {
+                                editing = false
+                            }
+                        },
+                        onAuthenticate = viewModel::startAuthentication,
+                        onCancel = if (credentials == null) null else ({ editing = false }),
+                        onClear = if (credentials == null) null else ({ viewModel.clearCredentials() }),
+                        onRefreshDevices = viewModel::refreshDevices,
+                        onSelectDevice = {
+                            viewModel.selectDevice(it)
                             editing = false
-                        }
-                    },
-                    onCancel = if (credentials == null) null else ({ editing = false }),
-                    onClear = if (credentials == null) null else ({ viewModel.clearCredentials() }),
-                    onRefreshDevices = viewModel::refreshDevices,
-                    onSelectDevice = {
-                        viewModel.selectDevice(it)
-                        editing = false
-                    },
-                )
-            } else {
-                WaterControl(
-                    uiState = uiState,
-                    running = lastKnownRunning,
-                    onCheckedChange = { pendingRunningState = it },
-                    onUpdateCredentials = { editing = true },
-                )
+                        },
+                    )
+                } else {
+                    WaterControl(
+                        uiState = uiState,
+                        running = lastKnownRunning,
+                        onCheckedChange = { pendingRunningState = it },
+                        onUpdateCredentials = { editing = true },
+                    )
+                }
+                Spacer(Modifier.height(24.dp))
             }
-            Spacer(Modifier.height(24.dp))
         }
     }
 
@@ -168,6 +180,7 @@ private fun WaterCredentialsForm(
     availableDevices: List<WaterDevice>,
     uiState: WaterUiState,
     onSave: (String, String, String, String) -> Unit,
+    onAuthenticate: () -> Unit,
     onCancel: (() -> Unit)?,
     onClear: (() -> Unit)?,
     onRefreshDevices: () -> Unit,
@@ -189,7 +202,7 @@ private fun WaterCredentialsForm(
         style = MaterialTheme.typography.headlineSmall,
     )
     Text(
-        text = "当前抓包尚未包含登录和 Cookie 建立过程，请先从你自己的 HTTPS 抓包导入认证信息。openid 与 JSESSIONID 会保存到系统安全存储；设备号可由常用设备接口自动获取。",
+        text = "可通过学校官方页面认证并自动获取 openid 与 JSESSIONID。首次认证可能显示二维码，可截图后在微信扫一扫中从相册识别；手动导入仍作为兜底。",
         modifier = Modifier.padding(vertical = 12.dp),
         color = MaterialTheme.colorScheme.outline,
         textAlign = TextAlign.Center,
@@ -219,6 +232,7 @@ private fun WaterCredentialsForm(
         onValueChange = { openId = it.trim() },
         modifier = Modifier.fillMaxWidth(),
         label = { Text("openid") },
+        supportingText = { Text("需使用校园卡页面下发的 64 位 openid") },
         visualTransformation = PasswordVisualTransformation(),
         singleLine = true,
     )
@@ -254,6 +268,14 @@ private fun WaterCredentialsForm(
         singleLine = true,
     )
     Spacer(Modifier.height(20.dp))
+    Button(
+        onClick = onAuthenticate,
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
+    ) {
+        Text("使用官方页面认证")
+    }
+    Spacer(Modifier.height(8.dp))
     Button(
         onClick = { onSave(openId, sessionId, posCode, orgId) },
         modifier = Modifier.fillMaxWidth(),
@@ -298,6 +320,37 @@ private fun WaterCredentialsForm(
     onClear?.let {
         TextButton(onClick = it, modifier = Modifier.fillMaxWidth()) {
             Text("清除本地凭据", color = MaterialTheme.colorScheme.error)
+        }
+    }
+}
+
+@Composable
+private fun WaterAuthenticationContent(
+    modifier: Modifier,
+    onAuthenticated: (String, String) -> Unit,
+    onCancel: () -> Unit,
+    onError: (String) -> Unit,
+) {
+    Column(
+        modifier = modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(
+            text = "请在学校官方页面完成认证。若出现二维码，可截图后在微信扫一扫中从相册识别，再返回本页面。认证完成后会自动保存凭据。",
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+            color = MaterialTheme.colorScheme.outline,
+            textAlign = TextAlign.Center,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        WaterAuthenticationView(
+            modifier = Modifier
+                .fillMaxWidth()
+                .weight(1F),
+            onAuthenticated = onAuthenticated,
+            onError = onError,
+        )
+        TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
+            Text("取消认证")
         }
     }
 }
