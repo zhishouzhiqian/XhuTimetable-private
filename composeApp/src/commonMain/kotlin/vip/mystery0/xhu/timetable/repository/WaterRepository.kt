@@ -53,7 +53,7 @@ class WaterRepository(
             validateResponse(
                 response.success,
                 response.resultData?.result,
-                response.resultData?.message.orEmpty().ifBlank { response.message },
+                response.resultData?.message.orEmpty().ifBlank { response.message.orEmpty() },
             )
             response.resultData?.data.orEmpty().sortedByDescending { it.beginTime }
         }
@@ -69,8 +69,8 @@ class WaterRepository(
                 REQUESTED_WITH, WATER_ORIGIN, "$WATER_ORIGIN/", WaterHomeRequest(value.openId),
             )
             if (!response.success) {
-                throwIfAuthenticationExpired(response.message)
-                throw WaterBusinessException(response.message.ifBlank { "查询水阀状态失败" })
+                throwIfAuthenticationExpired(response.message.orEmpty())
+                throw WaterBusinessException(response.message.orEmpty().ifBlank { "查询水阀状态失败" })
             }
             hasActiveWaterRecord(response.wcrList) || hasActiveWaterRecord(response.resultData)
         }
@@ -98,7 +98,7 @@ class WaterRepository(
             validateResponse(
                 success = response.success,
                 result = response.resultData?.result,
-                message = response.resultData?.message.orEmpty().ifBlank { response.message },
+                message = response.resultData?.message.orEmpty().ifBlank { response.message.orEmpty() },
             )
             response.resultData?.data.orEmpty()
                 .filter { it.posCode.matches(Regex("\\d{6}")) && it.orgId.isNotBlank() }
@@ -151,10 +151,10 @@ class WaterRepository(
             validateResponse(
                 success = response.success,
                 result = response.resultData?.result,
-                message = response.resultData?.message.orEmpty().ifBlank { response.message },
+                message = response.resultData?.message.orEmpty().ifBlank { response.message.orEmpty() },
             )
             response.resultData?.message.orEmpty().ifBlank {
-                response.message.ifBlank { "操作成功" }
+                response.message.orEmpty().ifBlank { "操作成功" }
             }
         }
     }
@@ -172,8 +172,8 @@ class WaterRepository(
         )
         val userType = response.data?.userType.orEmpty()
         if (!response.success || userType.isBlank()) {
-            throwIfAuthenticationExpired(response.message)
-            throw WaterUnknownResponseException(response.message.ifBlank { "无法读取用水账户类型" })
+            throwIfAuthenticationExpired(response.message.orEmpty())
+            throw WaterUnknownResponseException(response.message.orEmpty().ifBlank { "无法读取用水账户类型" })
         }
         userType
     }
@@ -186,8 +186,8 @@ class WaterRepository(
                 "", userType, credentials.orgId,
             )
             if (!response.success) {
-                throwIfAuthenticationExpired(response.message)
-                throw WaterBusinessException(response.message.ifBlank { "读取校园卡余额失败" })
+                throwIfAuthenticationExpired(response.message.orEmpty())
+                throw WaterBusinessException(response.message.orEmpty().ifBlank { "读取校园卡余额失败" })
             }
             parseYuanToCents(response.data?.cardBalance.orEmpty())
                 ?: throw WaterUnknownResponseException("校园卡余额格式无法识别")

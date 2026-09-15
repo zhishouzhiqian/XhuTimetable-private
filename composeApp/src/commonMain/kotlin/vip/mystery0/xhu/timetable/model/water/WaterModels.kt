@@ -51,14 +51,14 @@ data class WaterDeviceListRequest(
 @Serializable
 data class WaterDeviceListResponse(
     val success: Boolean = false,
-    val message: String = "",
+    val message: String? = null,
     val resultData: WaterDeviceListResultData? = null,
 )
 
 @Serializable
 data class WaterDeviceListResultData(
     val result: String = "",
-    val message: String = "",
+    val message: String? = null,
     val data: List<WaterDevice> = emptyList(),
 )
 
@@ -76,22 +76,22 @@ data class WaterDevice(
 data class WaterHomeRequest(@SerialName("openid") val openId: String)
 
 @Serializable
-data class WaterHomeResponse(val success: Boolean = false, val message: String = "", val data: WaterHomeData? = null)
+data class WaterHomeResponse(val success: Boolean = false, val message: String? = null, val data: WaterHomeData? = null)
 
 @Serializable
 data class WaterHomeData(@SerialName("usertype") val userType: String = "")
 
 @Serializable
-data class WaterBalanceResponse(val success: Boolean = false, val message: String = "", val data: WaterBalanceData? = null)
+data class WaterBalanceResponse(val success: Boolean = false, val message: String? = null, val data: WaterBalanceData? = null)
 
 @Serializable
 data class WaterBalanceData(@SerialName("cardbal") val cardBalance: String = "")
 
 @Serializable
-data class WaterUseRecordResponse(val success: Boolean = false, val message: String = "", val resultData: WaterUseRecordResultData? = null)
+data class WaterUseRecordResponse(val success: Boolean = false, val message: String? = null, val resultData: WaterUseRecordResultData? = null)
 
 @Serializable
-data class WaterUseRecordResultData(val result: String = "", val message: String = "", val data: List<WaterUseRecord> = emptyList())
+data class WaterUseRecordResultData(val result: String = "", val message: String? = null, val data: List<WaterUseRecord> = emptyList())
 
 @Serializable
 data class WaterUseRecord(
@@ -106,7 +106,7 @@ data class WaterUseRecord(
 @Serializable
 data class WaterRawResponse(
     val success: Boolean = false,
-    val message: String = "",
+    val message: String? = null,
     val resultData: JsonElement? = null,
     val wcrList: JsonElement? = null,
 )
@@ -137,14 +137,14 @@ fun decideWaterQuickAction(
 @Serializable
 data class WaterCommandResponse(
     val success: Boolean = false,
-    val message: String = "",
+    val message: String? = null,
     val resultData: WaterResultData? = null,
 )
 
 @Serializable
 data class WaterResultData(
     val result: String = "",
-    val message: String = "",
+    val message: String? = null,
 )
 
 sealed interface WaterUiState {

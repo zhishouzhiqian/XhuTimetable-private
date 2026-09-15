@@ -12,6 +12,16 @@ import vip.mystery0.xhu.timetable.repository.isWaterAuthenticationExpiredMessage
 
 class WaterModelsTest {
     @Test
+    fun nullableServerMessageDoesNotBreakSuccessfulLoginResponse() {
+        val response = Json { ignoreUnknownKeys = true }.decodeFromString<WaterHomeResponse>(
+            """{"title":null,"message":null,"success":true,"data":{"openid":null,"usertype":"1"}}""",
+        )
+        assertTrue(response.success)
+        assertNull(response.message)
+        assertEquals("1", response.data?.userType)
+    }
+
+    @Test
     fun balanceStringUsesIntegerCents() {
         assertEquals(200L, parseYuanToCents("2"))
         assertEquals(205L, parseYuanToCents("2.05"))
