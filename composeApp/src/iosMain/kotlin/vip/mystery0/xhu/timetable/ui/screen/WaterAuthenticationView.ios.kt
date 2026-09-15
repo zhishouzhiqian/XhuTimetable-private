@@ -12,6 +12,7 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.readValue
 import platform.CoreGraphics.CGRectZero
 import platform.Foundation.NSMutableURLRequest
+import platform.Foundation.NSHTTPCookie
 import platform.Foundation.NSURL
 import platform.WebKit.WKNavigation
 import platform.WebKit.WKNavigationDelegateProtocol
@@ -38,10 +39,15 @@ internal actual fun WaterAuthenticationView(
                 val openId = extractWaterOpenId(url) ?: return@navigationFinished
                 webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies ->
                     if (delivered) return@getAllCookies
-                    val sessionId = cookies.firstOrNull { cookie ->
-                        cookie.name == "JSESSIONID" &&
-                                cookie.domain.removePrefix(".") == WATER_HOST
-                    }?.value.orEmpty()
+                    val sessionId = cookies
+                        ?.asSequence()
+                        ?.filterIsInstance<NSHTTPCookie>()
+                        ?.firstOrNull { cookie ->
+                            cookie.name == "JSESSIONID" &&
+                                    cookie.domain.removePrefix(".") == WATER_HOST
+                        }
+                        ?.value
+                        .orEmpty()
                     if (sessionId.isBlank()) {
                         currentOnError("官方页面已完成跳转，但没有建立用水会话")
                         return@getAllCookies
