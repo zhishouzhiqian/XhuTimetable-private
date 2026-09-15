@@ -4,6 +4,9 @@ import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.ResponseException
 import io.ktor.http.HttpStatusCode
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import vip.mystery0.xhu.timetable.api.WaterApi
 import vip.mystery0.xhu.timetable.base.BaseDataRepo
 import vip.mystery0.xhu.timetable.config.HINT_NETWORK
@@ -12,10 +15,67 @@ import vip.mystery0.xhu.timetable.model.water.WaterCommandResponse
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
 import vip.mystery0.xhu.timetable.model.water.WaterDevice
 import vip.mystery0.xhu.timetable.model.water.WaterDeviceListRequest
+import vip.mystery0.xhu.timetable.model.water.WaterHomeRequest
+import vip.mystery0.xhu.timetable.model.water.WaterOverview
+import vip.mystery0.xhu.timetable.model.water.WaterUseRecord
+import vip.mystery0.xhu.timetable.model.water.parseYuanToCents
 
 class WaterRepository(
     private val waterApi: WaterApi,
 ) : BaseDataRepo {
+    suspend fun getOverview(credentials: WaterCredentials): WaterOverview {
+        val value = credentials.normalized()
+        ensureAuthenticated(value)
+        ensureOnline()
+        val userType = getUserType(value)
+        val balance = getBalance(value, userType)
+        val records = getUseWaterRecords(value)
+        val running = getRunningState(value)
+        return WaterOverview(balance, records, running)
+    }
+
+    suspend fun getBalance(credentials: WaterCredentials): Long {
+        val value = credentials.normalized()
+        ensureAuthenticated(value)
+        ensureOnline()
+        return getBalance(value, getUserType(value))
+    }
+
+    suspend fun getUseWaterRecords(credentials: WaterCredentials): List<WaterUseRecord> {
+        val value = credentials.normalized()
+        ensureAuthenticated(value)
+        ensureOnline()
+        return requestSafely {
+            val response = waterApi.getUseWaterRecords(
+                sessionCookie(value), value.orgId, SESSION_TYPE, IS_WECHAT_APP,
+                REQUESTED_WITH, WATER_ORIGIN, "$WATER_ORIGIN/", WaterHomeRequest(value.openId),
+            )
+            validateResponse(
+                response.success,
+                response.resultData?.result,
+                response.resultData?.message.orEmpty().ifBlank { response.message },
+            )
+            response.resultData?.data.orEmpty().sortedByDescending { it.beginTime }
+        }
+    }
+
+    suspend fun getRunningState(credentials: WaterCredentials): Boolean {
+        val value = credentials.normalized()
+        ensureAuthenticated(value)
+        ensureOnline()
+        return requestSafely {
+            val response = waterApi.getRunningState(
+                sessionCookie(value), value.orgId, SESSION_TYPE, IS_WECHAT_APP,
+                REQUESTED_WITH, WATER_ORIGIN, "$WATER_ORIGIN/", WaterHomeRequest(value.openId),
+            )
+            if (!response.success) {
+                throwIfAuthenticationExpired(response.message)
+                throw WaterBusinessException(response.message.ifBlank { "查询水阀状态失败" })
+            }
+            hasActiveWaterRecord(response.wcrList) || hasActiveWaterRecord(response.resultData)
+        }
+    }
+
     suspend fun getOftenUsedDevices(credentials: WaterCredentials): List<WaterDevice> {
         val value = credentials.normalized()
         ensureAuthenticated(value)
@@ -105,6 +165,37 @@ class WaterRepository(
         }
     }
 
+    private suspend fun getUserType(credentials: WaterCredentials): String = requestSafely {
+        val response = waterApi.getWaterHome(
+            sessionCookie(credentials), credentials.orgId, SESSION_TYPE, IS_WECHAT_APP,
+            REQUESTED_WITH, WATER_ORIGIN, "$WATER_ORIGIN/", WaterHomeRequest(credentials.openId),
+        )
+        val userType = response.data?.userType.orEmpty()
+        if (!response.success || userType.isBlank()) {
+            throwIfAuthenticationExpired(response.message)
+            throw WaterUnknownResponseException(response.message.ifBlank { "无法读取用水账户类型" })
+        }
+        userType
+    }
+
+    private suspend fun getBalance(credentials: WaterCredentials, userType: String): Long =
+        requestSafely {
+            val response = waterApi.getBalance(
+                sessionCookie(credentials), credentials.orgId, SESSION_TYPE, IS_WECHAT_APP,
+                REQUESTED_WITH, WATER_ORIGIN, "$WATER_ORIGIN/", credentials.openId,
+                "", userType, credentials.orgId,
+            )
+            if (!response.success) {
+                throwIfAuthenticationExpired(response.message)
+                throw WaterBusinessException(response.message.ifBlank { "读取校园卡余额失败" })
+            }
+            parseYuanToCents(response.data?.cardBalance.orEmpty())
+                ?: throw WaterUnknownResponseException("校园卡余额格式无法识别")
+        }
+
+    private fun sessionCookie(credentials: WaterCredentials): String =
+        "JSESSIONID=${credentials.sessionId}"
+
     private fun ensureOnline() {
         if (!isOnline) {
             throw WaterNetworkException(HINT_NETWORK)
@@ -132,13 +223,22 @@ class WaterRepository(
         message: String,
     ) {
         if (!success) {
+            throwIfAuthenticationExpired(message)
             throw WaterBusinessException(message.ifBlank { "用水服务返回失败" })
         }
         if (result.isNullOrBlank()) {
             throw WaterUnknownResponseException("用水服务返回了无法识别的响应")
         }
         if (result != SUCCESS_CODE) {
+            throwIfAuthenticationExpired(message)
             throw WaterBusinessException(message.ifBlank { "用水服务操作失败" })
+        }
+    }
+
+    private fun throwIfAuthenticationExpired(message: String) {
+        val normalized = message.lowercase()
+        if (isWaterAuthenticationExpiredMessage(normalized)) {
+            throw WaterAuthExpiredException()
         }
     }
 
@@ -149,6 +249,22 @@ class WaterRepository(
         const val IS_WECHAT_APP = "true"
         const val REQUESTED_WITH = "XMLHttpRequest"
     }
+}
+
+internal fun hasActiveWaterRecord(value: JsonElement?): Boolean = value.hasNonEmptyList("wcrList")
+
+internal fun isWaterAuthenticationExpiredMessage(message: String): Boolean {
+    val normalized = message.lowercase()
+    return normalized.contains("登录") || normalized.contains("认证") ||
+            normalized.contains("session") || normalized.contains("openid")
+}
+
+private fun JsonElement?.hasNonEmptyList(key: String): Boolean = when (this) {
+    is JsonArray -> isNotEmpty()
+    is JsonObject -> entries.any { (name, value) ->
+        (name == key && value is JsonArray && value.isNotEmpty()) || value.hasNonEmptyList(key)
+    }
+    else -> false
 }
 
 class WaterAuthExpiredException : RuntimeException("用水服务登录状态已失效，请重新导入认证信息")

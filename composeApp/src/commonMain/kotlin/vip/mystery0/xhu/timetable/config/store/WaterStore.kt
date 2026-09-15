@@ -13,6 +13,8 @@ object WaterStore {
     private const val LAST_KNOWN_RUNNING = "waterLastKnownRunning"
     private const val OPEN_ID = "openid"
     private const val SESSION_ID = "sessionId"
+    private const val START_BALANCE_CENTS = "startBalanceCents"
+    private const val EXIT_RECOVERY_PENDING = "waterExitRecoveryPending"
 
     private val json = Json {
         ignoreUnknownKeys = true
@@ -87,6 +89,23 @@ object WaterStore {
 
     suspend fun setLastKnownRunning(running: Boolean) = withContext(Dispatchers.IO) {
         Store.UserStore.setConfiguration(LAST_KNOWN_RUNNING, running)
+    }
+
+    suspend fun getStartBalanceCents(): Long? = withContext(Dispatchers.IO) {
+        WaterSecureStore.get(START_BALANCE_CENTS)?.toLongOrNull()
+    }
+
+    suspend fun setStartBalanceCents(value: Long?) = withContext(Dispatchers.IO) {
+        if (value == null) WaterSecureStore.remove(START_BALANCE_CENTS)
+        else WaterSecureStore.set(START_BALANCE_CENTS, value.toString())
+    }
+
+    suspend fun isExitRecoveryPending(): Boolean = withContext(Dispatchers.IO) {
+        Store.UserStore.getConfiguration(EXIT_RECOVERY_PENDING, false)
+    }
+
+    suspend fun setExitRecoveryPending(pending: Boolean) = withContext(Dispatchers.IO) {
+        Store.UserStore.setConfiguration(EXIT_RECOVERY_PENDING, pending)
     }
 
     private fun saveDeviceConfiguration(configuration: WaterDeviceConfiguration) {

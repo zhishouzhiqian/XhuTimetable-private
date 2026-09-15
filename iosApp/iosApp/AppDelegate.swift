@@ -3,6 +3,10 @@ import UserNotifications
 import ComposeApp
 
 final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+    func applicationWillTerminate(_ application: UIApplication) {
+        IosWaterExitBridge.shared.stopIfRunning()
+    }
+
     func application(
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil

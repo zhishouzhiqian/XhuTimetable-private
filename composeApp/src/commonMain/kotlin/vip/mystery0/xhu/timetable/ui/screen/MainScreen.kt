@@ -7,16 +7,21 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.FlexibleBottomAppBar
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -51,15 +56,23 @@ import vip.mystery0.xhu.timetable.ui.component.tabOfWhenEnableCalendar
 import vip.mystery0.xhu.timetable.ui.navigation.LocalNavController
 import vip.mystery0.xhu.timetable.ui.navigation.RouteLogin
 import vip.mystery0.xhu.timetable.ui.navigation.RouteMain
+import vip.mystery0.xhu.timetable.ui.navigation.RouteWater
+import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
+import vip.mystery0.xhu.timetable.model.water.WaterUiState
+import vip.mystery0.xhu.timetable.model.water.formatWaterCents
+import vip.mystery0.xhu.timetable.model.water.WaterQuickAction
+import vip.mystery0.xhu.timetable.model.water.decideWaterQuickAction
 import vip.mystery0.xhu.timetable.ui.navigation.replaceTo
 import vip.mystery0.xhu.timetable.ui.theme.isDarkMode
 import vip.mystery0.xhu.timetable.ui.theme.stateOf
 import vip.mystery0.xhu.timetable.viewmodel.MainViewModel
 import vip.mystery0.xhu.timetable.viewmodel.PagerProfileViewModel
+import vip.mystery0.xhu.timetable.viewmodel.WaterViewModel
 
 @Composable
 fun MainScreen() {
     val viewModel = koinViewModel<MainViewModel>()
+    val waterViewModel = koinViewModel<WaterViewModel>()
 
     val navController = LocalNavController.current
 
@@ -74,6 +87,7 @@ fun MainScreen() {
 
     LaunchedEffect(Unit) {
         viewModel.loadBackground(isDarkMode)
+        waterViewModel.init()
     }
     HandleEventBus()
     ShowUpdateDialog()
@@ -90,6 +104,13 @@ fun MainScreen() {
                 scrollBehavior = scrollBehavior,
                 title = {
                     tab.titleBar?.let { it() }
+                },
+                navigationIcon = {
+                    if (tab == Tab.TODAY) {
+                        WaterQuickControl(waterViewModel) {
+                            navController.navigate(RouteWater)
+                        }
+                    }
                 },
                 actions = {
                     val loading by viewModel.loading.collectAsState()
@@ -187,6 +208,59 @@ fun MainScreen() {
     val emptyUser by viewModel.emptyUser.collectAsState()
     if (emptyUser) {
         navController.replaceTo<RouteMain>(RouteLogin(false))
+    }
+
+    val lowBalance by waterViewModel.lowBalanceConfirmation.collectAsState()
+    lowBalance?.let { balance ->
+        AlertDialog(
+            onDismissRequest = waterViewModel::dismissLowBalanceStart,
+            title = { Text("校园卡余额较低") },
+            text = { Text("当前余额 ¥${formatWaterCents(balance)}，低于 ¥2.00。仍要开水吗？") },
+            confirmButton = {
+                TextButton(onClick = waterViewModel::confirmLowBalanceStart) { Text("仍要开水") }
+            },
+            dismissButton = {
+                TextButton(onClick = waterViewModel::dismissLowBalanceStart) { Text("取消") }
+            },
+        )
+    }
+}
+
+@Composable
+private fun WaterQuickControl(viewModel: WaterViewModel, openDetails: () -> Unit) {
+    val state by viewModel.uiState.collectAsState()
+    val credentials by viewModel.credentials.collectAsState()
+    val running by viewModel.lastKnownRunning.collectAsState()
+    val busy = state == WaterUiState.Loading || state == WaterUiState.Starting ||
+            state == WaterUiState.Stopping || state == WaterUiState.Authenticating
+    val action = decideWaterQuickAction(credentials, state, running)
+    Box(
+        modifier = Modifier
+            .clickable(enabled = !busy) {
+                when (action) {
+                    WaterQuickAction.NavigateToDetails -> openDetails()
+                    WaterQuickAction.Start -> viewModel.startWater()
+                    WaterQuickAction.Stop -> viewModel.stopWater()
+                    WaterQuickAction.Wait -> Unit
+                }
+            }
+            .padding(horizontal = 8.dp),
+    ) {
+        if (busy) {
+            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+        } else {
+            Switch(
+                checked = running,
+                onCheckedChange = null,
+                thumbContent = {
+                    Icon(
+                        painter = XhuIcons.Action.switch,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                    )
+                },
+            )
+        }
     }
 }
 

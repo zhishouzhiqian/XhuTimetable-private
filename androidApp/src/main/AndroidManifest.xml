@@ -125,6 +125,11 @@
             </intent-filter>
         </service>
 
+        <service
+            android:name="vip.mystery0.xhu.timetable.water.WaterExitGuardService"
+            android:exported="false"
+            android:stopWithTask="false" />
+
         <meta-data
             android:name="JPUSH_CHANNEL"
             android:value="${JPUSH_CHANNEL}" />

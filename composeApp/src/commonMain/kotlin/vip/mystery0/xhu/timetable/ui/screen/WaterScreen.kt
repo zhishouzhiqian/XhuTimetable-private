@@ -45,6 +45,8 @@ import vip.mystery0.xhu.timetable.base.HandleErrorMessage
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
 import vip.mystery0.xhu.timetable.model.water.WaterDevice
 import vip.mystery0.xhu.timetable.model.water.WaterUiState
+import vip.mystery0.xhu.timetable.model.water.WaterUseRecord
+import vip.mystery0.xhu.timetable.model.water.formatWaterCents
 import vip.mystery0.xhu.timetable.ui.navigation.LocalNavController
 import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
 import vip.mystery0.xhu.timetable.viewmodel.WaterViewModel
@@ -58,9 +60,12 @@ fun WaterScreen() {
     val credentials by viewModel.credentials.collectAsState()
     val availableDevices by viewModel.availableDevices.collectAsState()
     val lastKnownRunning by viewModel.lastKnownRunning.collectAsState()
+    val balanceCents by viewModel.balanceCents.collectAsState()
+    val records by viewModel.records.collectAsState()
+    val lastCostCents by viewModel.lastCostCents.collectAsState()
+    val lowBalance by viewModel.lowBalanceConfirmation.collectAsState()
 
     var editing by remember { mutableStateOf(false) }
-    var pendingRunningState by remember { mutableStateOf<Boolean?>(null) }
 
     LaunchedEffect(Unit) {
         viewModel.init()
@@ -131,8 +136,18 @@ fun WaterScreen() {
                     WaterControl(
                         uiState = uiState,
                         running = lastKnownRunning,
-                        onCheckedChange = { pendingRunningState = it },
+                        onCheckedChange = { running ->
+                            if (running) viewModel.startWater() else viewModel.stopWater()
+                        },
                         onUpdateCredentials = { editing = true },
+                    )
+                    Spacer(Modifier.height(20.dp))
+                    WaterAccountSummary(
+                        balanceCents = balanceCents,
+                        lastCostCents = lastCostCents,
+                        records = records,
+                        loading = uiState == WaterUiState.Loading,
+                        onRefresh = viewModel::refreshOverview,
                     )
                 }
                 Spacer(Modifier.height(24.dp))
@@ -140,38 +155,90 @@ fun WaterScreen() {
         }
     }
 
-    pendingRunningState?.let { targetRunning ->
+    lowBalance?.let { balance ->
         AlertDialog(
-            onDismissRequest = { pendingRunningState = null },
-            title = { Text(if (targetRunning) "确认开水" else "确认关水") },
-            text = {
-                Text(
-                    if (targetRunning) {
-                        "确认向当前配置的设备发送开水指令？"
-                    } else {
-                        "确认向当前配置的设备发送关水指令？"
-                    }
-                )
-            },
+            onDismissRequest = viewModel::dismissLowBalanceStart,
+            title = { Text("校园卡余额较低") },
+            text = { Text("当前余额 ¥${formatWaterCents(balance)}，低于 ¥2.00。仍要开水吗？") },
             confirmButton = {
-                TextButton(
-                    onClick = {
-                        pendingRunningState = null
-                        if (targetRunning) viewModel.startWater() else viewModel.stopWater()
-                    }
-                ) {
-                    Text("确认")
-                }
+                TextButton(onClick = viewModel::confirmLowBalanceStart) { Text("仍要开水") }
             },
             dismissButton = {
-                TextButton(onClick = { pendingRunningState = null }) {
-                    Text("取消")
-                }
+                TextButton(onClick = viewModel::dismissLowBalanceStart) { Text("取消") }
             },
         )
     }
 
     HandleErrorMessage(flow = viewModel.errorMessage)
+}
+
+@Composable
+private fun WaterAccountSummary(
+    balanceCents: Long?,
+    lastCostCents: Long?,
+    records: List<WaterUseRecord>,
+    loading: Boolean,
+    onRefresh: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column {
+                    Text("校园卡余额", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        balanceCents?.let { "¥${formatWaterCents(it)}" } ?: "暂未取得",
+                        style = MaterialTheme.typography.headlineSmall,
+                        color = if (balanceCents != null && balanceCents < 200) {
+                            MaterialTheme.colorScheme.error
+                        } else MaterialTheme.colorScheme.primary,
+                    )
+                }
+                IconButton(onClick = onRefresh, enabled = !loading) {
+                    if (loading) CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                    else Icon(XhuIcons.Action.sync, contentDescription = "刷新")
+                }
+            }
+            lastCostCents?.let {
+                Text(
+                    "本次按余额差计算：¥${formatWaterCents(it)}",
+                    color = MaterialTheme.colorScheme.outline,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+    Spacer(Modifier.height(20.dp))
+    Text("用水记录", style = MaterialTheme.typography.titleLarge, modifier = Modifier.fillMaxWidth())
+    Spacer(Modifier.height(8.dp))
+    if (records.isEmpty()) {
+        Text(
+            if (loading) "正在加载记录…" else "暂无用水记录",
+            modifier = Modifier.padding(vertical = 20.dp),
+            color = MaterialTheme.colorScheme.outline,
+        )
+    } else {
+        records.forEach { record ->
+            Card(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Text(record.beginTime.ifBlank { "时间未知" }, style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "设备 ${record.posCode.ifBlank { "未知" }} · 金额 ${record.amountFen?.let { "¥${formatWaterCents(it)}" } ?: "待同步"}",
+                    )
+                    val details = buildList {
+                        record.durationSeconds?.takeIf { it >= 0 }?.let { add("时长 ${it / 60}分${it % 60}秒") }
+                        record.waterUsage.takeIf(String::isNotBlank)?.let { add("用量 $it") }
+                    }.joinToString(" · ")
+                    if (details.isNotBlank()) {
+                        Text(details, color = MaterialTheme.colorScheme.outline, style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -408,7 +475,7 @@ private fun WaterControl(
             Column(modifier = Modifier.weight(1F)) {
                 Text(if (running) "水阀已开启" else "水阀已关闭")
                 Text(
-                    text = "状态来自本机最近一次成功操作",
+                    text = "状态来自服务端未关阀记录",
                     color = MaterialTheme.colorScheme.outline,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -439,7 +506,7 @@ private fun WaterControl(
         }
     }
     Text(
-        text = "请只对本人有权使用的设备操作。离开页面前请确认已经关水。",
+        text = "请只对本人有权使用的设备操作。应用退出时会尽力自动关水，但断网、崩溃或 iOS 挂起后强杀无法保证成功。",
         modifier = Modifier.padding(top = 20.dp),
         color = MaterialTheme.colorScheme.outline,
         textAlign = TextAlign.Center,

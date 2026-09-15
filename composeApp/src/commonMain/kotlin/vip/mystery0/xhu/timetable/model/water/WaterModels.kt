@@ -2,6 +2,7 @@ package vip.mystery0.xhu.timetable.model.water
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
 
 @Serializable
 data class WaterCredentials(
@@ -72,6 +73,68 @@ data class WaterDevice(
 )
 
 @Serializable
+data class WaterHomeRequest(@SerialName("openid") val openId: String)
+
+@Serializable
+data class WaterHomeResponse(val success: Boolean = false, val message: String = "", val data: WaterHomeData? = null)
+
+@Serializable
+data class WaterHomeData(@SerialName("usertype") val userType: String = "")
+
+@Serializable
+data class WaterBalanceResponse(val success: Boolean = false, val message: String = "", val data: WaterBalanceData? = null)
+
+@Serializable
+data class WaterBalanceData(@SerialName("cardbal") val cardBalance: String = "")
+
+@Serializable
+data class WaterUseRecordResponse(val success: Boolean = false, val message: String = "", val resultData: WaterUseRecordResultData? = null)
+
+@Serializable
+data class WaterUseRecordResultData(val result: String = "", val message: String = "", val data: List<WaterUseRecord> = emptyList())
+
+@Serializable
+data class WaterUseRecord(
+    @SerialName("begintimestr") val beginTime: String = "",
+    @SerialName("txamt") val amountFen: Long? = null,
+    @SerialName("sumtime") val durationSeconds: Long? = null,
+    @SerialName("sumuse") val waterUsage: String = "",
+    @SerialName("chargingtype") val chargingType: String = "",
+    @SerialName("poscode") val posCode: String = "",
+)
+
+@Serializable
+data class WaterRawResponse(
+    val success: Boolean = false,
+    val message: String = "",
+    val resultData: JsonElement? = null,
+    val wcrList: JsonElement? = null,
+)
+
+data class WaterOverview(val balanceCents: Long, val records: List<WaterUseRecord>, val running: Boolean)
+
+sealed interface WaterStartDecision {
+    data class Ready(val balanceCents: Long) : WaterStartDecision
+    data class LowBalance(val balanceCents: Long) : WaterStartDecision
+}
+
+enum class WaterQuickAction { NavigateToDetails, Start, Stop, Wait }
+
+fun decideWaterQuickAction(
+    credentials: WaterCredentials?,
+    state: WaterUiState,
+    running: Boolean,
+): WaterQuickAction {
+    if (state == WaterUiState.Loading || state == WaterUiState.Authenticating ||
+        state == WaterUiState.Starting || state == WaterUiState.Stopping
+    ) return WaterQuickAction.Wait
+    if (credentials?.configured != true || state == WaterUiState.AuthExpired ||
+        state == WaterUiState.NotAuthenticated || state == WaterUiState.NotBound
+    ) return WaterQuickAction.NavigateToDetails
+    return if (running) WaterQuickAction.Stop else WaterQuickAction.Start
+}
+
+@Serializable
 data class WaterCommandResponse(
     val success: Boolean = false,
     val message: String = "",
@@ -105,4 +168,24 @@ enum class WaterErrorType {
     Business,
     MissingParameters,
     UnknownResponse,
+}
+
+fun parseYuanToCents(value: String): Long? {
+    val normalized = value.trim().removePrefix("¥").removePrefix("￥")
+    if (normalized.isBlank() || normalized.startsWith('-')) return null
+    val parts = normalized.split('.')
+    if (parts.size > 2 || parts[0].any { !it.isDigit() }) return null
+    val fraction = parts.getOrNull(1).orEmpty()
+    if (fraction.length > 2 || fraction.any { !it.isDigit() }) return null
+    val yuan = parts[0].toLongOrNull() ?: return null
+    val fen = when (fraction.length) { 0 -> 0; 1 -> fraction.toLong() * 10; else -> fraction.toLong() }
+    if (yuan > (Long.MAX_VALUE - fen) / 100) return null
+    return yuan * 100 + fen
+}
+
+fun formatWaterCents(value: Long): String = "${value / 100}.${(value % 100).toString().padStart(2, '0')}"
+
+fun calculateWaterCost(startCents: Long?, endCents: Long?): Long? {
+    if (startCents == null || endCents == null || endCents > startCents) return null
+    return startCents - endCents
 }

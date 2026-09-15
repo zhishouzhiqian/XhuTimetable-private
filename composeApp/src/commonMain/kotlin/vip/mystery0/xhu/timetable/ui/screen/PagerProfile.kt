@@ -186,6 +186,7 @@ val profileCourseContent: TabContent = @Composable {
         BuildProfileItem(
             painter = XhuIcons.Action.switch,
             title = "宿舍用水",
+            tint = MaterialTheme.colorScheme.primary,
             click = { navController.navigate(RouteWater) },
         )
         HorizontalDivider(
@@ -232,6 +233,7 @@ private fun BuildProfileItem(
     painter: Painter,
     title: String,
     showBadge: Boolean = false,
+    tint: Color = Color.Unspecified,
     click: () -> Unit = {}
 ) {
     Row(
@@ -243,7 +245,7 @@ private fun BuildProfileItem(
         Icon(
             painter = painter,
             contentDescription = null,
-            tint = Color.Unspecified,
+            tint = tint,
             modifier = Modifier
                 .padding(horizontal = 12.dp)
         )
