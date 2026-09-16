@@ -1,18 +1,40 @@
-def kFile = rootProject.file('local.properties')
-def props = new Properties()
 def signingConfig = project.extensions.getByName('android').signingConfigs.getByName('sign')
-if (kFile.canRead()) {
-    props.load(new FileInputStream(kFile))
+def releaseRequested = gradle.startParameter.taskNames.any { taskName ->
+    taskName.toLowerCase(Locale.ROOT).contains('release')
+}
 
-    if (props != null) {
-        signingConfig.storeFile = rootProject.file('composeApp').toPath().resolve(props['SIGN_KEY_STORE_FILE']).toFile()
-        signingConfig.storePassword = props['SIGN_KEY_STORE_PASSWORD']
-        signingConfig.keyAlias = props['SIGN_KEY_ALIAS']
-        signingConfig.keyPassword = props['SIGN_KEY_PASSWORD']
+def environmentValue = { String preferredName, String legacyName ->
+    def preferredValue = System.getenv(preferredName)
+    if (preferredValue != null && !preferredValue.trim().isEmpty()) {
+        return preferredValue
     }
-} else {
-    signingConfig.storeFile = rootProject.file('composeApp').toPath().resolve(System.getenv('SIGN_KEY_STORE_FILE')).toFile()
-    signingConfig.storePassword = System.getenv('SIGN_KEY_STORE_PASSWORD')
-    signingConfig.keyAlias = System.getenv('SIGN_KEY_ALIAS')
-    signingConfig.keyPassword = System.getenv('SIGN_KEY_PASSWORD')
+    return System.getenv(legacyName)
+}
+
+def keystorePath = environmentValue('ANDROID_KEYSTORE_PATH', 'SIGN_KEY_STORE_FILE')
+def keystorePassword = environmentValue('ANDROID_KEYSTORE_PASSWORD', 'SIGN_KEY_STORE_PASSWORD')
+def keyAlias = environmentValue('ANDROID_KEY_ALIAS', 'SIGN_KEY_ALIAS')
+def keyPassword = environmentValue('ANDROID_KEY_PASSWORD', 'SIGN_KEY_PASSWORD')
+
+if (releaseRequested) {
+    def missingVariables = []
+    if (keystorePath == null || keystorePath.trim().isEmpty()) missingVariables.add('ANDROID_KEYSTORE_PATH')
+    if (keystorePassword == null || keystorePassword.trim().isEmpty()) missingVariables.add('ANDROID_KEYSTORE_PASSWORD')
+    if (keyAlias == null || keyAlias.trim().isEmpty()) missingVariables.add('ANDROID_KEY_ALIAS')
+    if (keyPassword == null || keyPassword.trim().isEmpty()) missingVariables.add('ANDROID_KEY_PASSWORD')
+    if (!missingVariables.isEmpty()) {
+        throw new GradleException(
+            "Release 签名配置缺失，请设置环境变量：${missingVariables.join(', ')}"
+        )
+    }
+
+    def keystoreFile = rootProject.file(keystorePath)
+    if (!keystoreFile.isFile()) {
+        throw new GradleException("Release keystore 文件不存在：${keystoreFile}")
+    }
+
+    signingConfig.storeFile = keystoreFile
+    signingConfig.storePassword = keystorePassword
+    signingConfig.keyAlias = keyAlias
+    signingConfig.keyPassword = keyPassword
 }

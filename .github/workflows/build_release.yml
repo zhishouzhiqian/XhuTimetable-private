@@ -1,4 +1,5 @@
 name: Build Release
+
 on:
   workflow_dispatch:
     inputs:
@@ -8,7 +9,7 @@ on:
         type: string
         default: "https://image.xgkb.mystery0.vip"
       oldVersionCode:
-        description: '上一版本版本号(只要code)'
+        description: '上一版本版本号（只要 code）'
         required: true
         type: string
       forceUpdate:
@@ -16,91 +17,177 @@ on:
         required: true
         default: false
         type: boolean
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
-  STANDARD_OUTPUT_DIR: "androidApp/build/outputs/apk/standard/release"
-  STORE_OUTPUT_DIR: "androidApp/build/outputs/apk/store/release"
+  STANDARD_OUTPUT_DIR: androidApp/build/outputs/apk/standard/release
+  STORE_OUTPUT_DIR: androidApp/build/outputs/apk/store/release
+  STANDARD_BUNDLE_DIR: androidApp/build/outputs/bundle/standardRelease
+  STORE_BUNDLE_DIR: androidApp/build/outputs/bundle/storeRelease
+
 jobs:
   build-android:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      ANDROID_KEYSTORE_PATH: /tmp/xhu-release-upload-key.jks
+
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - name: 设置JDK
+
+      - name: Set up JDK 21
         uses: actions/setup-java@v6
         with:
           java-version: 21
-          distribution: 'temurin'
-      - name: 设置Android SDK
+          distribution: temurin
+
+      - name: Set up Android SDK
         uses: android-actions/setup-android@v4
         with:
-          packages: 'platform-tools'
-      - name: 解密签名
-        run: |
-          echo ${{ secrets.SIGN_KEY_BASE64 }} | base64 --decode > /tmp/key.jks
-          echo ${{ secrets.AG_CONNECT_JSON }} | base64 --decode > androidApp/agconnect-services.json
-      - name: Setup Gradle
+          packages: platform-tools
+
+      - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic
-      - name: 构建 APK
+
+      - name: Validate release secrets
+        shell: bash
         env:
-          SIGN_KEY_ALIAS: ${{ secrets.SIGN_KEY_ALIAS }}
-          SIGN_KEY_STORE_PASSWORD: ${{ secrets.SIGN_KEY_STORE_PASSWORD }}
-          SIGN_KEY_PASSWORD: ${{ secrets.SIGN_KEY_PASSWORD }}
-          SIGN_KEY_STORE_FILE: "/tmp/key.jks"
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          AG_CONNECT_JSON_BASE64: ${{ secrets.AG_CONNECT_JSON }}
           GITHUB_USERNAME: ${{ secrets.NEXUS_USER }}
           GITHUB_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
-          ./gradlew composeApp:exportLibraryDefinitions
-          ./gradlew assembleRelease
-      - name: 安装工具
+          missing=()
+          [[ -n "$ANDROID_KEYSTORE_BASE64" ]] || missing+=(ANDROID_KEYSTORE_BASE64)
+          [[ -n "$ANDROID_KEYSTORE_PASSWORD" ]] || missing+=(ANDROID_KEYSTORE_PASSWORD)
+          [[ -n "$ANDROID_KEY_ALIAS" ]] || missing+=(ANDROID_KEY_ALIAS)
+          [[ -n "$ANDROID_KEY_PASSWORD" ]] || missing+=(ANDROID_KEY_PASSWORD)
+          [[ -n "$AG_CONNECT_JSON_BASE64" ]] || missing+=(AG_CONNECT_JSON)
+          [[ -n "$GITHUB_USERNAME" ]] || missing+=(NEXUS_USER)
+          [[ -n "$GITHUB_PASSWORD" ]] || missing+=(NEXUS_PASSWORD)
+          if (( ${#missing[@]} > 0 )); then
+            printf '缺少正式构建所需的 GitHub Secrets：%s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Restore signing and service files
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          AG_CONNECT_JSON_BASE64: ${{ secrets.AG_CONNECT_JSON }}
         run: |
-          sudo apt-get install jq bsdiff
-          mkdir patch
-          curl -# -o "patch/old.apk" ${{ inputs.oldVersionUrl }}
-      - name: 解析编译文件路径
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          chmod 600 "$ANDROID_KEYSTORE_PATH"
+          printf '%s' "$AG_CONNECT_JSON_BASE64" | base64 --decode > androidApp/agconnect-services.json
+          chmod a+x gradlew
+
+      - name: Build signed APK and AAB
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GITHUB_USERNAME: ${{ secrets.NEXUS_USER }}
+          GITHUB_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          ./gradlew --stacktrace composeApp:exportLibraryDefinitions
+          ./gradlew --stacktrace androidApp:assembleRelease androidApp:bundleRelease
+
+      - name: Read artifact metadata
         id: apk
+        shell: bash
         run: |
-          versionName=$(jq -r '.elements[0].versionName' ${{ env.STANDARD_OUTPUT_DIR }}/output-metadata.json)
-          versionCode=$(jq -r '.elements[0].versionCode' ${{ env.STANDARD_OUTPUT_DIR }}/output-metadata.json)
-          
-          standardApkFile=$(jq -r '.elements[0].outputFile' ${{ env.STANDARD_OUTPUT_DIR }}/output-metadata.json)
-          storeApkFile=$(jq -r '.elements[0].outputFile' ${{ env.STORE_OUTPUT_DIR }}/output-metadata.json)
-          
-          cp "${{ env.STANDARD_OUTPUT_DIR }}/$standardApkFile" "patch/new.apk"
-          
-          echo "versionName=$versionName" >> $GITHUB_OUTPUT
-          echo "versionCode=$versionCode" >> $GITHUB_OUTPUT
-          echo "standardApkFile=$standardApkFile" >> $GITHUB_OUTPUT
-          echo "storeApkFile=$storeApkFile" >> $GITHUB_OUTPUT
-      - name: 生成 patch 文件
+          versionName=$(jq -r '.elements[0].versionName' "$STANDARD_OUTPUT_DIR/output-metadata.json")
+          versionCode=$(jq -r '.elements[0].versionCode' "$STANDARD_OUTPUT_DIR/output-metadata.json")
+          standardApkFile=$(jq -r '.elements[0].outputFile' "$STANDARD_OUTPUT_DIR/output-metadata.json")
+          storeApkFile=$(jq -r '.elements[0].outputFile' "$STORE_OUTPUT_DIR/output-metadata.json")
+
+          test -f "$STANDARD_OUTPUT_DIR/$standardApkFile"
+          test -f "$STORE_OUTPUT_DIR/$storeApkFile"
+          find "$STANDARD_BUNDLE_DIR" -maxdepth 1 -name '*.aab' -type f | grep -q .
+          find "$STORE_BUNDLE_DIR" -maxdepth 1 -name '*.aab' -type f | grep -q .
+
+          echo "versionName=$versionName" >> "$GITHUB_OUTPUT"
+          echo "versionCode=$versionCode" >> "$GITHUB_OUTPUT"
+          echo "standardApkFile=$standardApkFile" >> "$GITHUB_OUTPUT"
+          echo "storeApkFile=$storeApkFile" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release signatures
+        shell: bash
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          [[ -x "$APKSIGNER" ]] || { echo '没有找到 apksigner。' >&2; exit 1; }
+          "$APKSIGNER" verify --verbose "$STANDARD_OUTPUT_DIR/${{ steps.apk.outputs.standardApkFile }}"
+          "$APKSIGNER" verify --verbose "$STORE_OUTPUT_DIR/${{ steps.apk.outputs.storeApkFile }}"
+          find "$STANDARD_BUNDLE_DIR" "$STORE_BUNDLE_DIR" -maxdepth 1 -name '*.aab' -type f \
+            -exec jarsigner -verify -strict {} \;
+
+      - name: Prepare update patch
+        if: github.event_name == 'workflow_dispatch'
         id: patch
+        shell: bash
         run: |
+          sudo apt-get update
+          sudo apt-get install -y bsdiff
+          mkdir -p patch
+          curl --fail --location --show-error --output patch/old.apk '${{ inputs.oldVersionUrl }}'
+          cp "$STANDARD_OUTPUT_DIR/${{ steps.apk.outputs.standardApkFile }}" patch/new.apk
+
           patchFile="${{ inputs.oldVersionCode }}-${{ steps.apk.outputs.versionCode }}.patch"
           echo "$patchFile" > patch_name
-          bsdiff "patch/old.apk" "patch/new.apk" "patch/$patchFile"
-          
-          echo "patchFile=$patchFile" >> $GITHUB_OUTPUT
-          
-          apkMd5=$(md5sum "patch/new.apk" | cut -d" " -f1)
-          patchMd5=$(md5sum "patch/$patchFile" | cut -d" " -f1)
+          bsdiff patch/old.apk patch/new.apk "patch/$patchFile"
+          echo "patchFile=$patchFile" >> "$GITHUB_OUTPUT"
 
-          echo "新版本：${{ steps.apk.outputs.versionName }}-${{ steps.apk.outputs.versionCode }}" >> $GITHUB_STEP_SUMMARY
-          echo "md5: $apkMd5" >> $GITHUB_STEP_SUMMARY
-          echo "==========================================" >> $GITHUB_STEP_SUMMARY
-          echo "增量包：${patchFile}" >> $GITHUB_STEP_SUMMARY
-          echo "md5: $patchMd5" >> $GITHUB_STEP_SUMMARY
-      - name: 发布版本
+          apkMd5=$(md5sum patch/new.apk | cut -d' ' -f1)
+          patchMd5=$(md5sum "patch/$patchFile" | cut -d' ' -f1)
+          echo "新版本：${{ steps.apk.outputs.versionName }}-${{ steps.apk.outputs.versionCode }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "APK md5: $apkMd5" >> "$GITHUB_STEP_SUMMARY"
+          echo "增量包：$patchFile" >> "$GITHUB_STEP_SUMMARY"
+          echo "Patch md5: $patchMd5" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload signed release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: XhuTimetable-release-${{ steps.apk.outputs.versionName }}-${{ steps.apk.outputs.versionCode }}
+          path: |
+            ${{ env.STANDARD_OUTPUT_DIR }}/*.apk
+            ${{ env.STORE_OUTPUT_DIR }}/*.apk
+            ${{ env.STANDARD_BUNDLE_DIR }}/*.aab
+            ${{ env.STORE_BUNDLE_DIR }}/*.aab
+            androidApp/build/outputs/mapping/*Release/mapping.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish GitHub Release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.apk.outputs.versionName }}
+          tag_name: ${{ github.event_name == 'push' && github.ref_name || steps.apk.outputs.versionName }}
           prerelease: false
           body_path: version.log
           files: |
             ${{ env.STANDARD_OUTPUT_DIR }}/${{ steps.apk.outputs.standardApkFile }}
             ${{ env.STORE_OUTPUT_DIR }}/${{ steps.apk.outputs.storeApkFile }}
-      - name: 上传文件
+            ${{ env.STANDARD_BUNDLE_DIR }}/*.aab
+            ${{ env.STORE_BUNDLE_DIR }}/*.aab
+
+      - name: Upload deployment context
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
         with:
           name: build-context
@@ -110,81 +197,80 @@ jobs:
             patch/new.apk
             patch/${{ steps.patch.outputs.patchFile }}
             ${{ env.STANDARD_OUTPUT_DIR }}/output-metadata.json
+
+      - name: Remove restored secrets
+        if: always()
+        shell: bash
+        run: |
+          rm -f "$ANDROID_KEYSTORE_PATH" androidApp/agconnect-services.json
+
   deploy:
+    if: github.event_name == 'workflow_dispatch'
     needs: build-android
     runs-on: self-hosted
     steps:
-      - name: 下载部署文件
+      - name: Download deployment context
         uses: actions/download-artifact@v8
         with:
           name: build-context
-      - name: 计算MD5
+
+      - name: Calculate deployment metadata
         id: result
+        shell: bash
         run: |
-          OUTPUT_METADATA_FILE="${{ env.STANDARD_OUTPUT_DIR }}/output-metadata.json"
-          versionName=$(jq -r '.elements[0].versionName' $OUTPUT_METADATA_FILE)
-          versionCode=$(jq -r '.elements[0].versionCode' $OUTPUT_METADATA_FILE)
-          echo "versionName=$versionName" >> $GITHUB_OUTPUT
-          echo "versionCode=$versionCode" >> $GITHUB_OUTPUT
-          
+          OUTPUT_METADATA_FILE="$STANDARD_OUTPUT_DIR/output-metadata.json"
+          versionName=$(jq -r '.elements[0].versionName' "$OUTPUT_METADATA_FILE")
+          versionCode=$(jq -r '.elements[0].versionCode' "$OUTPUT_METADATA_FILE")
           patchFile=$(cat patch_name)
-          echo "patchFile=$patchFile" >> $GITHUB_OUTPUT
-          
-          apkMd5=$(md5sum "patch/new.apk" | cut -d" " -f1)
-          patchMd5=$(md5sum "patch/$patchFile" | cut -d" " -f1)
-          
-          echo "apkMd5=$apkMd5" >> $GITHUB_OUTPUT
-          echo "patchMd5=$patchMd5" >> $GITHUB_OUTPUT
-      - name: 上传 APK 文件
+          echo "versionName=$versionName" >> "$GITHUB_OUTPUT"
+          echo "versionCode=$versionCode" >> "$GITHUB_OUTPUT"
+          echo "patchFile=$patchFile" >> "$GITHUB_OUTPUT"
+          apkMd5=$(md5sum patch/new.apk | cut -d' ' -f1)
+          patchMd5=$(md5sum "patch/$patchFile" | cut -d' ' -f1)
+          echo "apkMd5=$apkMd5" >> "$GITHUB_OUTPUT"
+          echo "patchMd5=$patchMd5" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK file
         id: upload_apk
         uses: Mystery00/upload-actions@v1.15
         with:
-          signUrl: "${{ secrets.SIGNATURE_API }}"
-          mimeType: "application/vnd.android.package-archive"
+          signUrl: ${{ secrets.SIGNATURE_API }}
+          mimeType: application/vnd.android.package-archive
           st: apk
-          filePath: "patch/new.apk"
-          title: "${{ steps.result.outputs.versionName }}-${{ steps.result.outputs.versionCode }}.apk"
-      - name: 上传 APK 文件
+          filePath: patch/new.apk
+          title: ${{ steps.result.outputs.versionName }}-${{ steps.result.outputs.versionCode }}.apk
+
+      - name: Upload patch file
         id: upload_patch
         uses: Mystery00/upload-actions@v1.15
         with:
-          signUrl: "${{ secrets.SIGNATURE_API }}"
-          mimeType: "text/x-diff"
+          signUrl: ${{ secrets.SIGNATURE_API }}
+          mimeType: text/x-diff
           st: apk
-          filePath: "patch/${{ steps.result.outputs.patchFile }}"
-          title: "${{ steps.result.outputs.patchFile }}"
-      - name: 发布新版本
+          filePath: patch/${{ steps.result.outputs.patchFile }}
+          title: ${{ steps.result.outputs.patchFile }}
+
+      - name: Publish application update
+        shell: bash
         run: |
-          apkResourceId=${{ steps.upload_apk.outputs.resId }}
-          patchResourceId=${{ steps.upload_patch.outputs.resId }}
-          
-          echo $apkResourceId
-          echo $patchResourceId
-          if [ -z "$apkResourceId" ]; then
-            echo "apkResourceId is empty"
-            exit 1
-          fi
-          if [ -z "$patchResourceId" ]; then
-            echo "patchResourceId is empty"
-            exit 1
-          fi
-          
-          updateLog=$(cat "version.log")
-          
-          json='{apkResourceId:$apkResourceId,apkMd5:$apkMd5,patchResourceId:$patchResourceId,patchMd5:$patchMd5,updateLog:$updateLog,versionCode:$versionCode,versionName:$versionName,lastVersionCode:$lastVersionCode,forceUpdate:$forceUpdate}'
-          requestJson=$(
-          jq \
-          --arg apkResourceId "$apkResourceId" \
-          --arg apkMd5 "${{ steps.result.outputs.apkMd5 }}" \
-          --arg patchResourceId "$patchResourceId" \
-          --arg patchMd5 "${{ steps.result.outputs.patchMd5 }}" \
-          --arg updateLog "${updateLog}" \
-          --arg versionCode "${{ steps.result.outputs.versionCode }}" \
-          --arg versionName "${{ steps.result.outputs.versionName }}" \
-          --arg lastVersionCode "${{ inputs.oldVersionCode }}" \
-          --arg forceUpdate "${{ inputs.forceUpdate }}" \
-          -n "$json"
-          )
-          curl -s -X POST "${{ secrets.NEW_VERSION_API }}" \
+          apkResourceId='${{ steps.upload_apk.outputs.resId }}'
+          patchResourceId='${{ steps.upload_patch.outputs.resId }}'
+          [[ -n "$apkResourceId" ]] || { echo 'apkResourceId is empty' >&2; exit 1; }
+          [[ -n "$patchResourceId" ]] || { echo 'patchResourceId is empty' >&2; exit 1; }
+
+          updateLog=$(cat version.log)
+          requestJson=$(jq \
+            --arg apkResourceId "$apkResourceId" \
+            --arg apkMd5 '${{ steps.result.outputs.apkMd5 }}' \
+            --arg patchResourceId "$patchResourceId" \
+            --arg patchMd5 '${{ steps.result.outputs.patchMd5 }}' \
+            --arg updateLog "$updateLog" \
+            --arg versionCode '${{ steps.result.outputs.versionCode }}' \
+            --arg versionName '${{ steps.result.outputs.versionName }}' \
+            --arg lastVersionCode '${{ inputs.oldVersionCode }}' \
+            --arg forceUpdate '${{ inputs.forceUpdate }}' \
+            -n '{apkResourceId:$apkResourceId,apkMd5:$apkMd5,patchResourceId:$patchResourceId,patchMd5:$patchMd5,updateLog:$updateLog,versionCode:$versionCode,versionName:$versionName,lastVersionCode:$lastVersionCode,forceUpdate:$forceUpdate}')
+
+          curl --fail --silent --show-error -X POST '${{ secrets.NEW_VERSION_API }}' \
             -H 'Content-Type: application/json' \
             -d "$requestJson"

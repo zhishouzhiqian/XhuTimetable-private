@@ -10,6 +10,8 @@ composeApp/unused.txt
 composeApp/schemas/
 composeApp/src/commonMain/composeResources/files/aboutlibraries.json
 local.properties
+*.jks
+*.keystore
 .idea
 .DS_Store
 captures
