@@ -40,6 +40,8 @@ jobs:
     timeout-minutes: 60
     env:
       ANDROID_KEYSTORE_PATH: /tmp/xhu-release-upload-key.jks
+      # 个人 Fork 没有上游华为推送配置，正式包禁用 AG Connect 插件。
+      PERSONAL_ANDROID_TEST: true
 
     steps:
       - name: Checkout
@@ -70,7 +72,6 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-          AG_CONNECT_JSON_BASE64: ${{ secrets.AG_CONNECT_JSON }}
           GITHUB_USERNAME: ${{ secrets.NEXUS_USER }}
           GITHUB_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
         run: |
@@ -79,7 +80,6 @@ jobs:
           [[ -n "$ANDROID_KEYSTORE_PASSWORD" ]] || missing+=(ANDROID_KEYSTORE_PASSWORD)
           [[ -n "$ANDROID_KEY_ALIAS" ]] || missing+=(ANDROID_KEY_ALIAS)
           [[ -n "$ANDROID_KEY_PASSWORD" ]] || missing+=(ANDROID_KEY_PASSWORD)
-          [[ -n "$AG_CONNECT_JSON_BASE64" ]] || missing+=(AG_CONNECT_JSON)
           [[ -n "$GITHUB_USERNAME" ]] || missing+=(NEXUS_USER)
           [[ -n "$GITHUB_PASSWORD" ]] || missing+=(NEXUS_PASSWORD)
           if (( ${#missing[@]} > 0 )); then
@@ -91,11 +91,9 @@ jobs:
         shell: bash
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          AG_CONNECT_JSON_BASE64: ${{ secrets.AG_CONNECT_JSON }}
         run: |
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
           chmod 600 "$ANDROID_KEYSTORE_PATH"
-          printf '%s' "$AG_CONNECT_JSON_BASE64" | base64 --decode > androidApp/agconnect-services.json
           chmod a+x gradlew
 
       - name: Build signed APK and AAB
@@ -202,7 +200,7 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -f "$ANDROID_KEYSTORE_PATH" androidApp/agconnect-services.json
+          rm -f "$ANDROID_KEYSTORE_PATH"
 
   deploy:
     if: github.event_name == 'workflow_dispatch'
