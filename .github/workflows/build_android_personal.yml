@@ -1,0 +1,89 @@
+name: Build Android personal test APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - feature/water-service
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-personal-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test and build debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GITHUB_USERNAME: ${{ secrets.NEXUS_USER }}
+      GITHUB_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+      SIGN_KEY_STORE_FILE: /tmp/unused-personal-test.jks
+      SIGN_KEY_STORE_PASSWORD: unused
+      SIGN_KEY_ALIAS: unused
+      SIGN_KEY_PASSWORD: unused
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Check build credentials
+        shell: bash
+        run: |
+          if [[ -z "$GITHUB_USERNAME" || -z "$GITHUB_PASSWORD" ]]; then
+            echo "请在仓库 Actions secrets 中配置 NEXUS_USER 和 NEXUS_PASSWORD。" >&2
+            exit 1
+          fi
+          if [[ -z "${{ secrets.AG_CONNECT_JSON }}" ]]; then
+            echo "请在仓库 Actions secrets 中配置 AG_CONNECT_JSON。" >&2
+            exit 1
+          fi
+
+      - name: Configure Android build
+        shell: bash
+        run: |
+          chmod a+x gradlew
+          printf '%s' '${{ secrets.AG_CONNECT_JSON }}' | base64 --decode > androidApp/agconnect-services.json
+
+      - name: Run water unit tests
+        run: ./gradlew --stacktrace composeApp:testAndroidHostTest
+
+      - name: Build standard debug APK
+        run: ./gradlew --stacktrace androidApp:assembleStandardDebug
+
+      - name: Collect APK
+        shell: bash
+        run: |
+          APK_PATH=$(find androidApp/build/outputs/apk/standard/debug -maxdepth 1 -name '*.apk' -type f | head -n 1)
+          if [[ -z "$APK_PATH" ]]; then
+            echo "没有找到 Android debug APK。" >&2
+            exit 1
+          fi
+          mkdir -p build/android-personal
+          cp "$APK_PATH" build/android-personal/XhuTimetable-personal-debug.apk
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: XhuTimetable-personal-android-debug-${{ github.run_number }}
+          path: build/android-personal/XhuTimetable-personal-debug.apk
+          if-no-files-found: error
+          retention-days: 7

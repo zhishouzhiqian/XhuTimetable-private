@@ -12,7 +12,6 @@ import vip.mystery0.xhu.timetable.model.water.WaterErrorType
 import vip.mystery0.xhu.timetable.model.water.WaterStartDecision
 import vip.mystery0.xhu.timetable.model.water.WaterUiState
 import vip.mystery0.xhu.timetable.model.water.WaterUseRecord
-import vip.mystery0.xhu.timetable.model.water.calculateWaterCost
 import vip.mystery0.xhu.timetable.repository.WaterAuthExpiredException
 import vip.mystery0.xhu.timetable.repository.WaterBusinessException
 import vip.mystery0.xhu.timetable.repository.WaterMissingParametersException
@@ -197,22 +196,25 @@ class WaterServiceController(private val repository: WaterRepository) {
 
     private suspend fun stopLocked(value: WaterCredentials) {
         _uiState.value = WaterUiState.Stopping
+        val previousRecord = _records.value.firstOrNull { it.posCode == value.posCode }
         repository.stopWater(value)
-        val startBalance = WaterStore.getStartBalanceCents()
-        var endBalance: Long? = null
+        var latestRecords = _records.value
+        var latestRecord = previousRecord
         for (attempt in 0 until 3) {
             if (attempt > 0) delay(900)
-            endBalance = runCatching { repository.getBalance(value) }.getOrNull() ?: endBalance
-            if (calculateWaterCost(startBalance, endBalance) != null) break
+            latestRecords = runCatching {
+                repository.getUseWaterRecords(value)
+            }.getOrDefault(latestRecords)
+            latestRecord = latestRecords.firstOrNull { it.posCode == value.posCode }
+            if (latestRecord != null && latestRecord != previousRecord) break
         }
-        endBalance?.let { _balanceCents.value = it }
-        _records.value = runCatching { repository.getUseWaterRecords(value) }.getOrDefault(_records.value)
-        val balanceCost = calculateWaterCost(startBalance, endBalance)
-        val serverCost = _records.value.firstOrNull { it.posCode == value.posCode }?.amountFen
-        _lastCostCents.value = when {
-            serverCost != null && serverCost != balanceCost -> serverCost
-            else -> balanceCost ?: serverCost
-        }
+        _records.value = latestRecords
+        _lastCostCents.value = latestRecord
+            ?.takeIf { it != previousRecord }
+            ?.amountFen
+        runCatching { repository.getBalance(value) }
+            .getOrNull()
+            ?.let { _balanceCents.value = it }
         markStopped()
         _uiState.value = WaterUiState.Ready
     }

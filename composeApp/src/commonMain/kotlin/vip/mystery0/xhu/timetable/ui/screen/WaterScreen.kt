@@ -205,7 +205,7 @@ private fun WaterAccountSummary(
             }
             lastCostCents?.let {
                 Text(
-                    "本次按余额差计算：¥${formatWaterCents(it)}",
+                    "本次金额：¥${formatWaterCents(it)}",
                     color = MaterialTheme.colorScheme.outline,
                     style = MaterialTheme.typography.bodySmall,
                 )
@@ -507,7 +507,7 @@ private fun WaterControl(
         }
     }
     Text(
-        text = "请只对本人有权使用的设备操作。应用退出时会尽力自动关水，但断网、崩溃或 iOS 挂起后强杀无法保证成功。",
+        text = "请只对本人有权使用的设备操作。",
         modifier = Modifier.padding(top = 20.dp),
         color = MaterialTheme.colorScheme.outline,
         textAlign = TextAlign.Center,
