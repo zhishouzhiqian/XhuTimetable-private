@@ -3,7 +3,11 @@ import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.composeCompiler)
-    alias(libs.plugins.huaweiAgconnect)
+    alias(libs.plugins.huaweiAgconnect) apply false
+}
+
+if (System.getenv("PERSONAL_ANDROID_TEST")?.toBoolean() != true) {
+    apply(plugin = "com.huawei.agconnect")
 }
 
 val packageName = "vip.mystery0.xhu.timetable"

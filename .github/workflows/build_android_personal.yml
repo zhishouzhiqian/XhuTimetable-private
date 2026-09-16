@@ -25,6 +25,7 @@ jobs:
       SIGN_KEY_STORE_PASSWORD: unused
       SIGN_KEY_ALIAS: unused
       SIGN_KEY_PASSWORD: unused
+      PERSONAL_ANDROID_TEST: true
 
     steps:
       - name: Checkout
@@ -49,16 +50,11 @@ jobs:
             echo "请在仓库 Actions secrets 中配置 NEXUS_USER 和 NEXUS_PASSWORD。" >&2
             exit 1
           fi
-          if [[ -z "${{ secrets.AG_CONNECT_JSON }}" ]]; then
-            echo "请在仓库 Actions secrets 中配置 AG_CONNECT_JSON。" >&2
-            exit 1
-          fi
 
       - name: Configure Android build
         shell: bash
         run: |
           chmod a+x gradlew
-          printf '%s' '${{ secrets.AG_CONNECT_JSON }}' | base64 --decode > androidApp/agconnect-services.json
 
       - name: Run water unit tests
         run: ./gradlew --stacktrace composeApp:testAndroidHostTest
