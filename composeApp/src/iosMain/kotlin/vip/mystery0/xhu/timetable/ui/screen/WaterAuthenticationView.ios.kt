@@ -9,6 +9,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.UIKitView
 import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.ObjCSignatureOverride
 import kotlinx.cinterop.readValue
 import platform.CoreGraphics.CGRectZero
 import platform.Foundation.NSMutableURLRequest
@@ -97,7 +98,7 @@ internal actual fun WaterAuthenticationView(
                 if (url == null) {
                     currentOnError("官方认证地址无效")
                 } else if (automaticRecovery) {
-                    deleteWaterSessionCookieAndLoad(webView, url)
+                    deleteWaterSessionCookieAndLoad(this, url)
                 } else {
                     loadRequest(NSMutableURLRequest.requestWithURL(url))
                 }
@@ -116,10 +117,12 @@ private class WaterNavigationDelegate(
     private val onNavigationStarted: (WKWebView) -> Unit,
     private val onNavigationFinished: (WKWebView) -> Unit,
 ) : NSObject(), WKNavigationDelegateProtocol {
+    @ObjCSignatureOverride
     override fun webView(webView: WKWebView, didStartProvisionalNavigation: WKNavigation?) {
         onNavigationStarted(webView)
     }
 
+    @ObjCSignatureOverride
     override fun webView(webView: WKWebView, didFinishNavigation: WKNavigation?) {
         onNavigationFinished(webView)
     }
