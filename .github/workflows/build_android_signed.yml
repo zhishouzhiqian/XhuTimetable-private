@@ -1,0 +1,143 @@
+name: Build Android signed release artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-signed-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ANDROID_KEYSTORE_PATH: /tmp/xhu-release-upload-key.jks
+  STANDARD_OUTPUT_DIR: androidApp/build/outputs/apk/standard/release
+  STORE_OUTPUT_DIR: androidApp/build/outputs/apk/store/release
+  STANDARD_BUNDLE_DIR: androidApp/build/outputs/bundle/standardRelease
+  STORE_BUNDLE_DIR: androidApp/build/outputs/bundle/storeRelease
+
+jobs:
+  build:
+    name: Test and build signed APK/AAB
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # 个人 Fork 没有上游华为推送配置，正式包禁用 AG Connect 插件。
+      PERSONAL_ANDROID_TEST: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v4
+        with:
+          packages: platform-tools
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      - name: Validate build secrets
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GITHUB_USERNAME: ${{ secrets.NEXUS_USER }}
+          GITHUB_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          missing=()
+          [[ -n "$ANDROID_KEYSTORE_BASE64" ]] || missing+=(ANDROID_KEYSTORE_BASE64)
+          [[ -n "$ANDROID_KEYSTORE_PASSWORD" ]] || missing+=(ANDROID_KEYSTORE_PASSWORD)
+          [[ -n "$ANDROID_KEY_ALIAS" ]] || missing+=(ANDROID_KEY_ALIAS)
+          [[ -n "$ANDROID_KEY_PASSWORD" ]] || missing+=(ANDROID_KEY_PASSWORD)
+          [[ -n "$GITHUB_USERNAME" ]] || missing+=(NEXUS_USER)
+          [[ -n "$GITHUB_PASSWORD" ]] || missing+=(NEXUS_PASSWORD)
+          if (( ${#missing[@]} > 0 )); then
+            printf '缺少正式构建所需的 GitHub Secrets：%s\n' "${missing[*]}" >&2
+            exit 1
+          fi
+
+      - name: Restore signing file
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE_PATH"
+          chmod 600 "$ANDROID_KEYSTORE_PATH"
+          chmod a+x gradlew
+
+      - name: Run water unit tests
+        env:
+          GITHUB_USERNAME: ${{ secrets.NEXUS_USER }}
+          GITHUB_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: ./gradlew --stacktrace composeApp:testAndroidHostTest
+
+      - name: Build signed release APK and AAB
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          GITHUB_USERNAME: ${{ secrets.NEXUS_USER }}
+          GITHUB_PASSWORD: ${{ secrets.NEXUS_PASSWORD }}
+        run: |
+          ./gradlew --stacktrace composeApp:exportLibraryDefinitions
+          ./gradlew --stacktrace androidApp:assembleRelease androidApp:bundleRelease
+
+      - name: Read artifact metadata
+        id: artifact
+        shell: bash
+        run: |
+          versionName=$(jq -r '.elements[0].versionName' "$STANDARD_OUTPUT_DIR/output-metadata.json")
+          versionCode=$(jq -r '.elements[0].versionCode' "$STANDARD_OUTPUT_DIR/output-metadata.json")
+          standardApkFile=$(jq -r '.elements[0].outputFile' "$STANDARD_OUTPUT_DIR/output-metadata.json")
+          storeApkFile=$(jq -r '.elements[0].outputFile' "$STORE_OUTPUT_DIR/output-metadata.json")
+
+          test -f "$STANDARD_OUTPUT_DIR/$standardApkFile"
+          test -f "$STORE_OUTPUT_DIR/$storeApkFile"
+          find "$STANDARD_BUNDLE_DIR" -maxdepth 1 -name '*.aab' -type f | grep -q .
+          find "$STORE_BUNDLE_DIR" -maxdepth 1 -name '*.aab' -type f | grep -q .
+
+          echo "versionName=$versionName" >> "$GITHUB_OUTPUT"
+          echo "versionCode=$versionCode" >> "$GITHUB_OUTPUT"
+          echo "standardApkFile=$standardApkFile" >> "$GITHUB_OUTPUT"
+          echo "storeApkFile=$storeApkFile" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release signatures
+        shell: bash
+        run: |
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -n 1)
+          [[ -x "$APKSIGNER" ]] || { echo '没有找到 apksigner。' >&2; exit 1; }
+          "$APKSIGNER" verify --verbose "$STANDARD_OUTPUT_DIR/${{ steps.artifact.outputs.standardApkFile }}"
+          "$APKSIGNER" verify --verbose "$STORE_OUTPUT_DIR/${{ steps.artifact.outputs.storeApkFile }}"
+          find "$STANDARD_BUNDLE_DIR" "$STORE_BUNDLE_DIR" -maxdepth 1 -name '*.aab' -type f \
+            -exec jarsigner -verify -strict {} \;
+
+      - name: Upload signed release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: XhuTimetable-signed-${{ steps.artifact.outputs.versionName }}-${{ steps.artifact.outputs.versionCode }}
+          path: |
+            ${{ env.STANDARD_OUTPUT_DIR }}/*.apk
+            ${{ env.STORE_OUTPUT_DIR }}/*.apk
+            ${{ env.STANDARD_BUNDLE_DIR }}/*.aab
+            ${{ env.STORE_BUNDLE_DIR }}/*.aab
+            androidApp/build/outputs/mapping/*Release/mapping.txt
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Remove restored signing file
+        if: always()
+        shell: bash
+        run: rm -f "$ANDROID_KEYSTORE_PATH"
