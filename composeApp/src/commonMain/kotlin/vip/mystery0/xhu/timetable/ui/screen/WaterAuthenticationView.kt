@@ -35,3 +35,10 @@ internal fun extractWaterSessionId(cookieHeader: String?): String? = cookieHeade
     ?.firstOrNull { it.size == 2 && it[0] == "JSESSIONID" }
     ?.get(1)
     ?.takeIf(String::isNotBlank)
+
+internal fun requiresWaterAuthenticationInteraction(url: String): Boolean {
+    val originAndPath = url.substringBefore('?').substringBefore('#').trimEnd('/')
+    return originAndPath.startsWith("https://open.weixin.qq.com/connect/oauth2/authorize") ||
+            originAndPath.startsWith("https://api.szszcloud.cn/v1/wechat/oauth2") ||
+            originAndPath.startsWith("https://xhyb.xhu.edu.cn/v1/wechat/bindpage")
+}

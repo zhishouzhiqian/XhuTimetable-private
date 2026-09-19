@@ -91,14 +91,26 @@ fun WaterScreen() {
             )
         },
     ) { paddingValues ->
-        if (uiState == WaterUiState.Authenticating) {
+        if (uiState == WaterUiState.Authenticating ||
+            uiState == WaterUiState.RecoveringAuthentication
+        ) {
+            val automaticRecovery = uiState == WaterUiState.RecoveringAuthentication
             WaterAuthenticationContent(
                 modifier = Modifier
                     .padding(paddingValues)
                     .fillMaxSize(),
                 onAuthenticated = viewModel::completeAuthentication,
-                onCancel = viewModel::cancelAuthentication,
-                onError = viewModel::failAuthentication,
+                automaticRecovery = automaticRecovery,
+                onCancel = if (automaticRecovery) {
+                    viewModel::failAuthenticationRecovery
+                } else {
+                    viewModel::cancelAuthentication
+                },
+                onError = if (automaticRecovery) {
+                    { viewModel.failAuthenticationRecovery() }
+                } else {
+                    viewModel::failAuthentication
+                },
             )
         } else {
             Column(
@@ -278,7 +290,7 @@ private fun WaterCredentialsForm(
     )
     when (uiState) {
         WaterUiState.AuthExpired -> Text(
-            text = "认证已失效，旧的 openid 与 JSESSIONID 已清除；设备信息仍保留。请重新导入认证信息。",
+            text = "认证已失效且自动续登未成功，旧的 openid 与 JSESSIONID 已清除；设备信息仍保留。请重新扫码认证。",
             modifier = Modifier.padding(bottom = 12.dp),
             color = MaterialTheme.colorScheme.error,
             textAlign = TextAlign.Center,
@@ -396,6 +408,7 @@ private fun WaterCredentialsForm(
 private fun WaterAuthenticationContent(
     modifier: Modifier,
     onAuthenticated: (String, String) -> Unit,
+    automaticRecovery: Boolean,
     onCancel: () -> Unit,
     onError: (String) -> Unit,
 ) {
@@ -404,7 +417,11 @@ private fun WaterAuthenticationContent(
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         Text(
-            text = "请在学校官方页面完成认证。若出现二维码，可截图后在微信扫一扫中从相册识别，再返回本页面。认证完成后会自动保存凭据。",
+            text = if (automaticRecovery) {
+                "正在使用 iOS 中保留的学校登录状态自动续登。若登录中心要求交互，将停止恢复并提示重新扫码。"
+            } else {
+                "请在学校官方页面完成认证。若出现二维码，可截图后在微信扫一扫中从相册识别，再返回本页面。认证完成后会自动保存凭据。"
+            },
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
             color = MaterialTheme.colorScheme.outline,
             textAlign = TextAlign.Center,
@@ -418,7 +435,7 @@ private fun WaterAuthenticationContent(
             onError = onError,
         )
         TextButton(onClick = onCancel, modifier = Modifier.fillMaxWidth()) {
-            Text("取消认证")
+            Text(if (automaticRecovery) "停止自动续登" else "取消认证")
         }
     }
 }
@@ -432,6 +449,7 @@ private fun WaterControl(
 ) {
     val busy = uiState == WaterUiState.Loading ||
             uiState == WaterUiState.Authenticating ||
+            uiState == WaterUiState.RecoveringAuthentication ||
             uiState == WaterUiState.Starting ||
             uiState == WaterUiState.Stopping
     val authExpired = uiState == WaterUiState.AuthExpired
@@ -439,6 +457,7 @@ private fun WaterControl(
         WaterUiState.Loading -> "正在读取配置"
         WaterUiState.NotAuthenticated -> "尚未认证"
         WaterUiState.Authenticating -> "正在认证"
+        WaterUiState.RecoveringAuthentication -> "正在自动续登"
         WaterUiState.NotBound -> "尚未绑定设备"
         WaterUiState.Ready -> "已就绪"
         WaterUiState.Starting -> "正在开水"
@@ -489,6 +508,7 @@ private fun WaterControl(
                     enabled = !authExpired &&
                             uiState != WaterUiState.Loading &&
                             uiState != WaterUiState.Authenticating &&
+                            uiState != WaterUiState.RecoveringAuthentication &&
                             uiState != WaterUiState.NotAuthenticated &&
                             uiState != WaterUiState.NotBound,
                     onCheckedChange = onCheckedChange,

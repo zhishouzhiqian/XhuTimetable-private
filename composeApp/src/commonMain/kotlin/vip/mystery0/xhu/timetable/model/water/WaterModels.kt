@@ -28,6 +28,11 @@ data class WaterCredentials(
         posCode = posCode.trim(),
         orgId = orgId.trim(),
     )
+
+    fun withAuthentication(openId: String, sessionId: String): WaterCredentials = copy(
+        openId = openId,
+        sessionId = sessionId,
+    ).normalized()
 }
 
 @Serializable
@@ -126,6 +131,7 @@ fun decideWaterQuickAction(
     running: Boolean,
 ): WaterQuickAction {
     if (state == WaterUiState.Loading || state == WaterUiState.Authenticating ||
+        state == WaterUiState.RecoveringAuthentication ||
         state == WaterUiState.Starting || state == WaterUiState.Stopping
     ) return WaterQuickAction.Wait
     if (credentials?.configured != true || state == WaterUiState.AuthExpired ||
@@ -151,6 +157,7 @@ sealed interface WaterUiState {
     data object Loading : WaterUiState
     data object NotAuthenticated : WaterUiState
     data object Authenticating : WaterUiState
+    data object RecoveringAuthentication : WaterUiState
     data object NotBound : WaterUiState
     data object Ready : WaterUiState
     data object Starting : WaterUiState

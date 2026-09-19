@@ -4,10 +4,13 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import vip.mystery0.xhu.timetable.Platform
+import vip.mystery0.xhu.timetable.platform
 import vip.mystery0.xhu.timetable.base.ComposeViewModel
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
 import vip.mystery0.xhu.timetable.model.water.WaterDevice
 import vip.mystery0.xhu.timetable.model.water.WaterStartDecision
+import vip.mystery0.xhu.timetable.repository.WaterAuthExpiredException
 import vip.mystery0.xhu.timetable.repository.WaterMissingParametersException
 import vip.mystery0.xhu.timetable.repository.WaterUnknownResponseException
 import vip.mystery0.xhu.timetable.water.WaterServiceController
@@ -54,6 +57,10 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
         controller.handleError(WaterUnknownResponseException(message.ifBlank { "官方认证页面加载失败" }))
     }
 
+    fun failAuthenticationRecovery() {
+        viewModelScope.launch { controller.failAuthenticationRecovery() }
+    }
+
     fun refreshDevices() = launchHandled { controller.refreshDevices() }
     fun refreshOverview() = launchHandled { controller.refreshOverview() }
     fun selectDevice(device: WaterDevice) = launchHandled { controller.selectDevice(device) }
@@ -84,10 +91,27 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
     private fun launchHandled(block: suspend () -> Unit) {
         viewModelScope.launch {
             try {
-                block()
+                if (platform() == Platform.IOS) {
+                    retryOnceAfterWaterAuthenticationExpired(
+                        operation = block,
+                        recover = controller::requestAuthenticationRecovery,
+                    )
+                } else {
+                    block()
+                }
             } catch (error: Throwable) {
                 controller.handleError(error)
             }
         }
     }
+}
+
+internal suspend fun <T> retryOnceAfterWaterAuthenticationExpired(
+    operation: suspend () -> T,
+    recover: suspend () -> Boolean,
+): T = try {
+    operation()
+} catch (error: WaterAuthExpiredException) {
+    if (!recover()) throw error
+    operation()
 }

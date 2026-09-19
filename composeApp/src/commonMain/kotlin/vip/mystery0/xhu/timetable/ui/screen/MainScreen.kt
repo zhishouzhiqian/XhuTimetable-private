@@ -232,7 +232,8 @@ private fun WaterQuickControl(viewModel: WaterViewModel, openDetails: () -> Unit
     val credentials by viewModel.credentials.collectAsState()
     val running by viewModel.lastKnownRunning.collectAsState()
     val busy = state == WaterUiState.Loading || state == WaterUiState.Starting ||
-            state == WaterUiState.Stopping || state == WaterUiState.Authenticating
+            state == WaterUiState.Stopping || state == WaterUiState.Authenticating ||
+            state == WaterUiState.RecoveringAuthentication
     val action = decideWaterQuickAction(credentials, state, running)
     Box(
         modifier = Modifier

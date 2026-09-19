@@ -1,10 +1,12 @@
 package vip.mystery0.xhu.timetable.water
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 import vip.mystery0.xhu.timetable.config.store.WaterStore
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
 import vip.mystery0.xhu.timetable.model.water.WaterDevice
@@ -22,6 +24,7 @@ import vip.mystery0.xhu.timetable.repository.WaterUnknownResponseException
 class WaterServiceController(private val repository: WaterRepository) {
     private val mutex = Mutex()
     private var initialized = false
+    private var authenticationRecovery: CompletableDeferred<Boolean>? = null
 
     private val _uiState = MutableStateFlow<WaterUiState>(WaterUiState.Loading)
     val uiState: StateFlow<WaterUiState> = _uiState
@@ -75,11 +78,42 @@ class WaterServiceController(private val repository: WaterRepository) {
 
     suspend fun saveAuthentication(openId: String, sessionId: String) = mutex.withLock {
         val current = _credentials.value ?: WaterCredentials(orgId = DEFAULT_ORG_ID)
-        val updated = current.copy(openId = openId, sessionId = sessionId).normalized()
+        val updated = current.withAuthentication(openId, sessionId)
         if (!updated.authenticated) throw WaterMissingParametersException("官方认证未返回完整凭据")
         WaterStore.saveCredentials(updated)
         _credentials.value = updated
-        if (updated.bound) refreshOverviewLocked(updated) else refreshDevicesLocked(updated)
+        val recovery = authenticationRecovery
+        if (recovery == null) {
+            if (updated.bound) refreshOverviewLocked(updated) else refreshDevicesLocked(updated)
+        } else {
+            authenticationRecovery = null
+            recovery.complete(true)
+        }
+    }
+
+    suspend fun requestAuthenticationRecovery(): Boolean {
+        val recovery = mutex.withLock {
+            authenticationRecovery ?: CompletableDeferred<Boolean>().also {
+                authenticationRecovery = it
+                _uiState.value = WaterUiState.RecoveringAuthentication
+            }
+        }
+        val recovered = withTimeoutOrNull(AUTHENTICATION_RECOVERY_TIMEOUT_MILLIS) {
+            recovery.await()
+        } ?: false
+        if (!recovered) {
+            mutex.withLock {
+                if (authenticationRecovery === recovery) authenticationRecovery = null
+            }
+        }
+        return recovered
+    }
+
+    suspend fun failAuthenticationRecovery() {
+        val recovery = mutex.withLock {
+            authenticationRecovery.also { authenticationRecovery = null }
+        }
+        recovery?.complete(false)
     }
 
     suspend fun selectDevice(device: WaterDevice) = mutex.withLock {
@@ -92,6 +126,8 @@ class WaterServiceController(private val repository: WaterRepository) {
 
     suspend fun clearCredentials() = mutex.withLock {
         if (_running.value) throw WaterBusinessException("请先关水，再清除本地凭据")
+        authenticationRecovery?.complete(false)
+        authenticationRecovery = null
         WaterStore.clearCredentials()
         WaterStore.setStartBalanceCents(null)
         WaterStore.setExitRecoveryPending(false)
@@ -156,6 +192,8 @@ class WaterServiceController(private val repository: WaterRepository) {
         }
         _uiState.value = when (error) {
             is WaterAuthExpiredException -> {
+                authenticationRecovery?.complete(false)
+                authenticationRecovery = null
                 WaterStore.clearAuthentication()
                 _credentials.value = _credentials.value?.copy(openId = "", sessionId = "")
                 WaterUiState.AuthExpired
@@ -245,6 +283,7 @@ class WaterServiceController(private val repository: WaterRepository) {
     companion object {
         const val LOW_BALANCE_CENTS = 200L
         private const val DEFAULT_ORG_ID = "2"
+        private const val AUTHENTICATION_RECOVERY_TIMEOUT_MILLIS = 45_000L
     }
 }
 
