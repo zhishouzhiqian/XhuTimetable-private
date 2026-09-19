@@ -11,6 +11,7 @@ import platform.Foundation.NSHTTPCookiePath
 import platform.Foundation.NSHTTPCookieSecure
 import platform.Foundation.NSHTTPCookieValue
 import platform.Foundation.timeIntervalSince1970
+import platform.Foundation.dateWithTimeIntervalSince1970
 import platform.WebKit.WKHTTPCookieStore
 import platform.WebKit.WKHTTPCookieStoreObserverProtocol
 import platform.darwin.NSObject
@@ -46,7 +47,7 @@ internal class WaterSchoolSessionPersistence : NSObject(), WKHTTPCookieStoreObse
                 if (saved.httpOnly) properties["HttpOnly"] = "TRUE"
                 saved.sameSite?.let { properties["SameSite"] = it }
                 saved.expiresAtSeconds?.let {
-                    properties[NSHTTPCookieExpires] = NSDate(timeIntervalSince1970 = it)
+                    properties[NSHTTPCookieExpires] = NSDate.dateWithTimeIntervalSince1970(it)
                 }
                 NSHTTPCookie.cookieWithProperties(properties)
             } else null
