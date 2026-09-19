@@ -6,6 +6,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
+import vip.mystery0.xhu.timetable.model.water.WaterSchoolSession
 
 object WaterStore {
     private const val DEVICE_CONFIGURATION = "waterDeviceConfiguration"
@@ -76,6 +77,7 @@ object WaterStore {
     }
 
     suspend fun clearCredentials() = withContext(Dispatchers.IO) {
+        WaterSecureStore.remove(WaterSchoolSession.STORAGE_KEY)
         WaterSecureStore.remove(OPEN_ID)
         WaterSecureStore.remove(SESSION_ID)
         Store.UserStore.removeConfiguration(DEVICE_CONFIGURATION)

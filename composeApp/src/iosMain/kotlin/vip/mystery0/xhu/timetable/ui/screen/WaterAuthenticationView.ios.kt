@@ -35,6 +35,7 @@ internal actual fun WaterAuthenticationView(
     val currentOnAuthenticated by rememberUpdatedState(onAuthenticated)
     val currentOnError by rememberUpdatedState(onError)
     var delivered by remember { mutableStateOf(false) }
+    val schoolSessionPersistence = remember { WaterSchoolSessionPersistence() }
     val automaticRecovery = remember {
         KoinPlatform.getKoin().get<WaterServiceController>().uiState.value ==
                 WaterUiState.RecoveringAuthentication
@@ -75,8 +76,12 @@ internal actual fun WaterAuthenticationView(
                         currentOnError("官方页面已完成跳转，但没有建立用水会话")
                         return@getAllCookies
                     }
-                    delivered = true
-                    currentOnAuthenticated(openId, sessionId)
+                    schoolSessionPersistence.checkpoint(webView.configuration.websiteDataStore.httpCookieStore) {
+                        if (!delivered) {
+                            delivered = true
+                            currentOnAuthenticated(openId, sessionId)
+                        }
+                    }
                 }
             },
         )
@@ -97,15 +102,17 @@ internal actual fun WaterAuthenticationView(
                 val url = NSURL(string = WATER_AUTH_ENTRY_URL)
                 if (url == null) {
                     currentOnError("官方认证地址无效")
-                } else if (automaticRecovery) {
-                    deleteWaterSessionCookieAndLoad(this, url)
                 } else {
-                    loadRequest(NSMutableURLRequest.requestWithURL(url))
+                    schoolSessionPersistence.restoreBeforeLoading(configuration.websiteDataStore.httpCookieStore) {
+                        if (automaticRecovery) deleteWaterSessionCookieAndLoad(this, url)
+                        else loadRequest(NSMutableURLRequest.requestWithURL(url))
+                    }
                 }
             }
         },
         modifier = modifier,
         onRelease = { webView ->
+            schoolSessionPersistence.close(webView.configuration.websiteDataStore.httpCookieStore)
             webView.stopLoading()
             webView.navigationDelegate = null
         },

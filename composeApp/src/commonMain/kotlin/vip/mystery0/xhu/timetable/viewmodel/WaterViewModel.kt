@@ -42,7 +42,10 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
             launchHandled { controller.handleError(WaterMissingParametersException(error)) }
             return false
         }
-        launchHandled { controller.saveCredentials(value) }
+        launchHandled(retryOperation = {
+            // 恢复后使用控制器中的新会话，不能再次写入表单中的旧凭据。
+            if (value.bound) controller.refreshOverview() else controller.refreshDevices()
+        }) { controller.saveCredentials(value) }
         return true
     }
 
@@ -88,13 +91,17 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
         toastMessage("关水成功")
     }
 
-    private fun launchHandled(block: suspend () -> Unit) {
+    private fun launchHandled(
+        retryOperation: (suspend () -> Unit)? = null,
+        block: suspend () -> Unit,
+    ) {
         viewModelScope.launch {
             try {
                 if (platform() == Platform.IOS) {
                     retryOnceAfterWaterAuthenticationExpired(
                         operation = block,
                         recover = controller::requestAuthenticationRecovery,
+                        retryOperation = retryOperation ?: block,
                     )
                 } else {
                     block()
@@ -109,9 +116,10 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
 internal suspend fun <T> retryOnceAfterWaterAuthenticationExpired(
     operation: suspend () -> T,
     recover: suspend () -> Boolean,
+    retryOperation: suspend () -> T = operation,
 ): T = try {
     operation()
 } catch (error: WaterAuthExpiredException) {
     if (!recover()) throw error
-    operation()
+    retryOperation()
 }
