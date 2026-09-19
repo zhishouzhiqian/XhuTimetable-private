@@ -2,6 +2,9 @@ name: Build Android signed release artifacts
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - feature/water-service
 
 permissions:
   contents: read
@@ -19,6 +22,7 @@ env:
 
 jobs:
   build:
+    if: github.event_name == 'workflow_dispatch' || contains(github.event.head_commit.message, '[build-signed-android]')
     name: Test and build signed APK/AAB
     runs-on: ubuntu-latest
     timeout-minutes: 60
