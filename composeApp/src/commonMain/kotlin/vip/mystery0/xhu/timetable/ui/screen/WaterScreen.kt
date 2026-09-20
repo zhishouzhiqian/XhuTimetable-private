@@ -51,6 +51,7 @@ import vip.mystery0.xhu.timetable.model.water.WaterAuthenticationRequest
 import vip.mystery0.xhu.timetable.model.water.WaterAuthenticationSource
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
 import vip.mystery0.xhu.timetable.model.water.WaterDevice
+import vip.mystery0.xhu.timetable.model.water.WaterStartDecision
 import vip.mystery0.xhu.timetable.model.water.WaterUiState
 import vip.mystery0.xhu.timetable.model.water.WaterUseRecord
 import vip.mystery0.xhu.timetable.model.water.formatWaterCents
