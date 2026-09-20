@@ -222,12 +222,16 @@ class WaterServiceController(
         startPrepared = false
         startConfirmationPending = false
         WaterStore.setStartBalanceCents(null)
-        if (!value.canQueryBalance) {
+        val balance = if (value.canQueryBalance) {
+            repository.getBalance(value)
+        } else {
+            getPerfectCampusBalance()
+        }
+        if (balance == null) {
             startConfirmationPending = true
             _uiState.value = WaterUiState.Ready
             return@withLock WaterStartDecision.BalanceUnavailable
         }
-        val balance = repository.getBalance(value)
         _balanceCents.value = balance
         WaterStore.setStartBalanceCents(balance)
         _uiState.value = WaterUiState.Ready
@@ -322,7 +326,7 @@ class WaterServiceController(
     private suspend fun refreshOverviewLocked(value: WaterCredentials) {
         _uiState.value = WaterUiState.Loading
         val overview = repository.getOverview(value)
-        _balanceCents.value = overview.balanceCents
+        _balanceCents.value = overview.balanceCents ?: getPerfectCampusBalance()
         _records.value = overview.records
         _running.value = overview.running
         WaterStore.setLastKnownRunning(overview.running)
@@ -363,11 +367,11 @@ class WaterServiceController(
         _lastCostCents.value = latestRecord
             ?.takeIf { it != previousRecord }
             ?.amountFen
-        if (value.canQueryBalance) {
-            runCatching { repository.getBalance(value) }
+        runCatching {
+            if (value.canQueryBalance) repository.getBalance(value) else getPerfectCampusBalance()
+        }
                 .getOrNull()
                 ?.let { _balanceCents.value = it }
-        }
         markStopped()
         _uiState.value = WaterUiState.Ready
     }
@@ -380,6 +384,11 @@ class WaterServiceController(
         WaterStore.setStartBalanceCents(null)
         WaterStore.setExitRecoveryPending(false)
         platformSetWaterRunning(false)
+    }
+
+    private suspend fun getPerfectCampusBalance(): Long? {
+        val session = WaterStore.loadPerfectCampusSession() ?: return null
+        return runCatching { perfectCampusRepository.getBalance(session) }.getOrNull()
     }
 
     private fun authenticatedCredentials(): WaterCredentials? {

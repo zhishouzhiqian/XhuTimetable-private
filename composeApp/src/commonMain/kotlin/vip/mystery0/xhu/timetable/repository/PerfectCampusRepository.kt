@@ -5,16 +5,23 @@ import dev.whyoleg.cryptography.CryptographyProvider
 import dev.whyoleg.cryptography.algorithms.RSA
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
+import io.ktor.client.request.forms.submitForm
 import io.ktor.client.request.header
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.http.ContentType
 import io.ktor.http.URLBuilder
 import io.ktor.http.contentType
+import io.ktor.http.parameters
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.decodeFromJsonElement
+import vip.mystery0.xhu.timetable.model.water.parseYuanToCents
 import vip.mystery0.xhu.timetable.utils.sha256
 import kotlin.io.encoding.Base64
 
@@ -42,6 +49,28 @@ class PerfectCampusRepository(private val client: HttpClient) {
     }
 
     fun authorizationUrl(token: String): String = buildPerfectCampusAuthorizationUrl(token)
+
+    suspend fun getBalance(token: String): Long {
+        if (token.isBlank()) throw PerfectCampusException("完美校园登录已失效")
+        val responseText: String = client.submitForm(
+            url = CARD_API_URL,
+            formParameters = parameters {
+                append("token", token)
+                append("method", CARD_BALANCE_METHOD)
+                append("param", "{}")
+            },
+        ) {
+            header("Origin", CARD_ORIGIN)
+            header("Referer", CARD_INDEX_URL)
+            header("X-Requested-With", "XMLHttpRequest")
+        }.body()
+        val response = json.decodeFromString<PerfectCampusCardResponse>(responseText)
+        if (!response.result) {
+            throw PerfectCampusException(response.message.ifBlank { "读取校园卡余额失败" })
+        }
+        return parsePerfectCampusBalance(response.body)
+            ?: throw PerfectCampusException("校园卡余额格式无法识别")
+    }
 
     fun cancelLogin() { pending = null }
 
@@ -103,6 +132,15 @@ internal fun buildPerfectCampusAuthorizationUrl(token: String): String = URLBuil
     @SerialName("result_") val result: Boolean = false,
     @SerialName("message_") val message: String = "",
 )
+@Serializable private data class PerfectCampusCardResponse(
+    @SerialName("result_") val result: Boolean = false,
+    @SerialName("body") val body: JsonElement? = null,
+    @SerialName("message_") val message: String = "",
+)
+@Serializable private data class PerfectCampusCardBalance(
+    val mainFare: String = "",
+    val subsidyFare: String = "",
+)
 @Serializable private data class SmsRequest(
     val action: String = "registAndLogin",
     val deviceId: String,
@@ -128,7 +166,31 @@ internal fun buildPerfectCampusAuthorizationUrl(token: String): String = URLBuil
 
 class PerfectCampusException(message: String) : RuntimeException(message)
 
+internal fun parsePerfectCampusBalance(body: JsonElement?): Long? {
+    val value = when (body) {
+        is JsonObject -> perfectCampusCardJson.decodeFromJsonElement<PerfectCampusCardBalance>(body)
+        is JsonPrimitive -> body.content.takeIf(String::isNotBlank)?.let {
+            runCatching { perfectCampusCardJson.decodeFromString<PerfectCampusCardBalance>(it) }.getOrNull()
+        }
+        else -> null
+    } ?: return null
+    val main = parseYuanToCents(value.mainFare) ?: return null
+    val subsidy = if (value.subsidyFare.isBlank()) {
+        0L
+    } else {
+        parseYuanToCents(value.subsidyFare) ?: return null
+    }
+    if (main > Long.MAX_VALUE - subsidy) return null
+    return main + subsidy
+}
+
+private val perfectCampusCardJson = Json { ignoreUnknownKeys = true }
+
 private const val EXCHANGE_URL = "https://app.17wanxiao.com/campus/cam_iface46/exchangeSecretkey.action"
 private const val SMS_URL = "https://app.17wanxiao.com/campus/cam_iface46/gainMatrixCaptcha.action"
 private const val SMS_LOGIN_URL = "https://app.17wanxiao.com/campus/cam_iface46/registerUsersByTelAndLoginNew.action"
 private const val AUTHORIZE_URL = "https://open.17wanxiao.com/api/authorize"
+private const val CARD_ORIGIN = "https://server.59wanmei.com"
+private const val CARD_INDEX_URL = "$CARD_ORIGIN/YKT_Interface/v2/index.html"
+private const val CARD_API_URL = "$CARD_ORIGIN/YKT_Interface/xyk"
+private const val CARD_BALANCE_METHOD = "XYK_BASE_INFO"
