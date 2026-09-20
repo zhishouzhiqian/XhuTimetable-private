@@ -38,7 +38,8 @@ internal fun extractWaterSessionId(cookieHeader: String?): String? = cookieHeade
 
 internal fun requiresWaterAuthenticationInteraction(url: String): Boolean {
     val originAndPath = url.substringBefore('?').substringBefore('#').trimEnd('/')
-    return originAndPath.startsWith("https://open.weixin.qq.com/connect/oauth2/authorize") ||
-            originAndPath.startsWith("https://api.szszcloud.cn/v1/wechat/oauth2") ||
-            originAndPath.startsWith("https://xhyb.xhu.edu.cn/v1/wechat/bindpage")
+    // OAuth 入口可能继续自动跳转，不能仅凭进入授权链就认定必须交互。
+    // 未识别的停留页面由恢复流程的总超时兜底。
+    return originAndPath == "https://xhyb.xhu.edu.cn/v1/wechat/qrcodelogin" ||
+            originAndPath == "https://xhyb.xhu.edu.cn/v1/wechat/bindpage"
 }

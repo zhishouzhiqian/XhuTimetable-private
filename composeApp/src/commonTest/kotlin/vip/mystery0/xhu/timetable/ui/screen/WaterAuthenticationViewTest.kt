@@ -46,10 +46,26 @@ class WaterAuthenticationViewTest {
     }
 
     @Test
-    fun detectsAuthenticationRoutesThatRequireInteraction() {
-        assertTrue(requiresWaterAuthenticationInteraction("https://open.weixin.qq.com/connect/oauth2/authorize?code=redacted"))
-        assertTrue(requiresWaterAuthenticationInteraction("https://api.szszcloud.cn/v1/wechat/oauth2?state=redacted"))
+    fun allowsOAuthIntermediateRoutes() {
+        assertFalse(requiresWaterAuthenticationInteraction("https://open.weixin.qq.com/connect/oauth2/authorize?code=test"))
+        assertFalse(requiresWaterAuthenticationInteraction("https://api.szszcloud.cn/v1/wechat/oauth2?state=test"))
+        assertFalse(requiresWaterAuthenticationInteraction("https://api.szszcloud.cn/v1/wechat/oauth/back?code=test"))
+        assertFalse(requiresWaterAuthenticationInteraction(WATER_AUTH_ENTRY_URL))
+    }
+
+    @Test
+    fun detectsKnownInteractivePages() {
+        assertTrue(requiresWaterAuthenticationInteraction("https://xhyb.xhu.edu.cn/v1/wechat/qrcodelogin"))
+        assertTrue(requiresWaterAuthenticationInteraction("https://xhyb.xhu.edu.cn/v1/wechat/qrcodelogin/?clientId=test#test"))
         assertTrue(requiresWaterAuthenticationInteraction("https://xhyb.xhu.edu.cn/v1/wechat/bindpage?open_id=redacted"))
         assertFalse(requiresWaterAuthenticationInteraction("https://ecard.xhu.edu.cn/#/pages/homepage/index/index?openid=redacted"))
+    }
+
+    @Test
+    fun doesNotClassifyByPathPrefixOrQueryContents() {
+        assertFalse(requiresWaterAuthenticationInteraction("https://xhyb.xhu.edu.cn/v1/wechat/qrcodelogin/callback"))
+        assertFalse(requiresWaterAuthenticationInteraction("https://xhyb.xhu.edu.cn/v1/wechat/bindpage-callback"))
+        assertFalse(requiresWaterAuthenticationInteraction("https://example.com/v1/wechat/qrcodelogin"))
+        assertFalse(requiresWaterAuthenticationInteraction("$WATER_AUTH_ENTRY_URL?next=https://xhyb.xhu.edu.cn/v1/wechat/qrcodelogin"))
     }
 }

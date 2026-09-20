@@ -51,15 +51,17 @@ internal actual fun WaterAuthenticationView(
                     currentOnError("官方认证跳转到了不受信任的地址")
                     return@navigationStarted
                 }
-                if (automaticRecovery && requiresWaterAuthenticationInteraction(url)) {
-                    delivered = true
-                    webView.stopLoading()
-                    currentOnError("学校登录状态也已失效，需要重新扫码认证")
-                }
             },
             onNavigationFinished = navigationFinished@{ webView ->
                 if (delivered) return@navigationFinished
                 val url = webView.URL?.absoluteString ?: return@navigationFinished
+                // 等页面完成跳转后判断，避免将 OAuth 中间节点当作交互失败。
+                if (automaticRecovery && requiresWaterAuthenticationInteraction(url)) {
+                    delivered = true
+                    webView.stopLoading()
+                    currentOnError("官方认证需要扫码或绑定，请重新认证")
+                    return@navigationFinished
+                }
                 val openId = extractWaterOpenId(url) ?: return@navigationFinished
                 webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies ->
                     if (delivered) return@getAllCookies
