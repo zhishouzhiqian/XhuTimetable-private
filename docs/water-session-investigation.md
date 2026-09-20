@@ -82,6 +82,7 @@ iOS 仅对学校域名、根路径的 `_sop_session_` 使用 Keychain 备份，�
 - iOS 提供完美校园短信登录入口：手机号和验证码只保留在当前内存流程，成功后的上游 session 写入 Keychain。
 - 通过抓包确认的 `/api/authorize` 公共客户端配置加载授权页，先删除旧的一卡通 JSESSIONID；回调建立新 JSESSIONID 后才保存并继续只读查询。
 - 完美校园链中的用水请求以空 openid 成功，因此业务认证条件改为 JSESSIONID 必填、openid 可空；微信链仍保留并校验 64 位 openid。
+- 完美校园链的设备、记录和水阀状态接口接受空 openid，但余额接口 `/home/openHomePageApp` 不接受：已有 HAR 中空 openid 返回 `success=false`，64 位 openid 返回 `success=true`。因此完美校园模式不能伪造微信 openid；开水前改为显示“余额未知”二次确认，只有用户明确确认后才发送开阀请求。
 - JSESSIONID 失效时优先使用 Keychain 中的完美校园 session 交换新会话，只允许原操作重试一次。上游 session 失效或授权未建立 JSESSIONID 时删除该上游 session，并要求重新短信登录或学校页面认证。
 - 清除短期认证不会删除设备号与组织编号；用户主动“清除本地凭据”时才同时删除完美校园 session。
 

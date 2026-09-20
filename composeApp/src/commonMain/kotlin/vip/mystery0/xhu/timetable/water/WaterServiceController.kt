@@ -33,6 +33,8 @@ class WaterServiceController(
     private val mutex = Mutex()
     private var initialized = false
     private var authenticationRecovery: CompletableDeferred<Boolean>? = null
+    private var startPrepared = false
+    private var startConfirmationPending = false
 
     private val _uiState = MutableStateFlow<WaterUiState>(WaterUiState.Loading)
     val uiState: StateFlow<WaterUiState> = _uiState
@@ -202,6 +204,8 @@ class WaterServiceController(
         authenticationRecovery = null
         WaterStore.clearCredentials()
         WaterStore.setStartBalanceCents(null)
+        startPrepared = false
+        startConfirmationPending = false
         WaterStore.setExitRecoveryPending(false)
         _credentials.value = null
         _authenticationRequest.value = null
@@ -215,21 +219,46 @@ class WaterServiceController(
     suspend fun prepareStart(): WaterStartDecision = mutex.withLock {
         val value = configuredCredentials() ?: throw WaterMissingParametersException("用水服务尚未就绪")
         _uiState.value = WaterUiState.Starting
+        startPrepared = false
+        startConfirmationPending = false
+        WaterStore.setStartBalanceCents(null)
+        if (!value.canQueryBalance) {
+            startConfirmationPending = true
+            _uiState.value = WaterUiState.Ready
+            return@withLock WaterStartDecision.BalanceUnavailable
+        }
         val balance = repository.getBalance(value)
         _balanceCents.value = balance
         WaterStore.setStartBalanceCents(balance)
         _uiState.value = WaterUiState.Ready
-        if (balance < LOW_BALANCE_CENTS) WaterStartDecision.LowBalance(balance)
-        else WaterStartDecision.Ready(balance)
+        if (balance < LOW_BALANCE_CENTS) {
+            startConfirmationPending = true
+            WaterStartDecision.LowBalance(balance)
+        } else {
+            startPrepared = true
+            WaterStartDecision.Ready(balance)
+        }
+    }
+
+    suspend fun confirmPreparedStart() = mutex.withLock {
+        configuredCredentials() ?: return@withLock
+        if (startPrepared) return@withLock
+        if (!startConfirmationPending) {
+            throw WaterMissingParametersException("没有待确认的开水请求")
+        }
+        startConfirmationPending = false
+        startPrepared = true
     }
 
     suspend fun start() = mutex.withLock {
         val value = configuredCredentials() ?: return
-        if (WaterStore.getStartBalanceCents() == null) {
-            throw WaterMissingParametersException("未取得开水前余额，请重试")
+        if (!startPrepared) {
+            throw WaterMissingParametersException("请先完成开水前确认")
         }
         _uiState.value = WaterUiState.Starting
         repository.startWater(value)
+        startPrepared = false
+        startConfirmationPending = false
         _running.value = true
         WaterStore.setLastKnownRunning(true)
         WaterStore.setExitRecoveryPending(true)
@@ -259,12 +288,18 @@ class WaterServiceController(
         _uiState.value = WaterUiState.Authenticating
     }
 
-    suspend fun cancelPreparedStart() {
-        if (!_running.value) WaterStore.setStartBalanceCents(null)
+    suspend fun cancelPreparedStart() = mutex.withLock {
+        if (!_running.value) {
+            startPrepared = false
+            startConfirmationPending = false
+            WaterStore.setStartBalanceCents(null)
+        }
     }
 
     suspend fun handleError(error: Throwable) {
         if (_uiState.value == WaterUiState.Starting && !_running.value) {
+            startPrepared = false
+            startConfirmationPending = false
             WaterStore.setStartBalanceCents(null)
         }
         _uiState.value = when (error) {
@@ -328,15 +363,19 @@ class WaterServiceController(
         _lastCostCents.value = latestRecord
             ?.takeIf { it != previousRecord }
             ?.amountFen
-        runCatching { repository.getBalance(value) }
-            .getOrNull()
-            ?.let { _balanceCents.value = it }
+        if (value.canQueryBalance) {
+            runCatching { repository.getBalance(value) }
+                .getOrNull()
+                ?.let { _balanceCents.value = it }
+        }
         markStopped()
         _uiState.value = WaterUiState.Ready
     }
 
     private suspend fun markStopped() {
         _running.value = false
+        startPrepared = false
+        startConfirmationPending = false
         WaterStore.setLastKnownRunning(false)
         WaterStore.setStartBalanceCents(null)
         WaterStore.setExitRecoveryPending(false)

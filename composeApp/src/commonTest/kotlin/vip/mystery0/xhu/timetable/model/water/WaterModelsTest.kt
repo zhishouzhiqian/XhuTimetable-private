@@ -93,5 +93,7 @@ class WaterModelsTest {
 
         assertTrue(credentials.authenticated)
         assertTrue(credentials.configured)
+        assertFalse(credentials.canQueryBalance)
+        assertTrue(credentials.copy(openId = "wechat-openid").canQueryBalance)
     }
 }

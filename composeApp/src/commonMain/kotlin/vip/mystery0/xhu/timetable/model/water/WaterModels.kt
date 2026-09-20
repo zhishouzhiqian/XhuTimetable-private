@@ -14,6 +14,9 @@ data class WaterCredentials(
     val authenticated: Boolean
         get() = sessionId.isNotBlank()
 
+    val canQueryBalance: Boolean
+        get() = openId.isNotBlank()
+
     val bound: Boolean
         get() = posCode.matches(Regex("\\d{6}")) && orgId.isNotBlank()
 
@@ -138,11 +141,12 @@ data class WaterRawResponse(
     val wcrList: JsonElement? = null,
 )
 
-data class WaterOverview(val balanceCents: Long, val records: List<WaterUseRecord>, val running: Boolean)
+data class WaterOverview(val balanceCents: Long?, val records: List<WaterUseRecord>, val running: Boolean)
 
 sealed interface WaterStartDecision {
     data class Ready(val balanceCents: Long) : WaterStartDecision
     data class LowBalance(val balanceCents: Long) : WaterStartDecision
+    data object BalanceUnavailable : WaterStartDecision
 }
 
 enum class WaterQuickAction { NavigateToDetails, Start, Stop, Wait }

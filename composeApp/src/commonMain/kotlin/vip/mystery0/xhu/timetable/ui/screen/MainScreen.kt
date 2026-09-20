@@ -59,6 +59,7 @@ import vip.mystery0.xhu.timetable.ui.navigation.RouteMain
 import vip.mystery0.xhu.timetable.ui.navigation.RouteWater
 import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
 import vip.mystery0.xhu.timetable.model.water.WaterUiState
+import vip.mystery0.xhu.timetable.model.water.WaterStartDecision
 import vip.mystery0.xhu.timetable.model.water.formatWaterCents
 import vip.mystery0.xhu.timetable.model.water.WaterQuickAction
 import vip.mystery0.xhu.timetable.model.water.decideWaterQuickAction
@@ -210,17 +211,32 @@ fun MainScreen() {
         navController.replaceTo<RouteMain>(RouteLogin(false))
     }
 
-    val lowBalance by waterViewModel.lowBalanceConfirmation.collectAsState()
-    lowBalance?.let { balance ->
+    val startConfirmation by waterViewModel.startConfirmation.collectAsState()
+    startConfirmation?.let { confirmation ->
         AlertDialog(
-            onDismissRequest = waterViewModel::dismissLowBalanceStart,
-            title = { Text("校园卡余额较低") },
-            text = { Text("当前余额 ¥${formatWaterCents(balance)}，低于 ¥2.00。仍要开水吗？") },
+            onDismissRequest = waterViewModel::dismissStartConfirmation,
+            title = {
+                Text(
+                    if (confirmation is WaterStartDecision.LowBalance) "校园卡余额较低"
+                    else "无法读取校园卡余额",
+                )
+            },
+            text = {
+                Text(
+                    when (confirmation) {
+                        is WaterStartDecision.LowBalance ->
+                            "当前余额 ¥${formatWaterCents(confirmation.balanceCents)}，低于 ¥2.00。仍要开水吗？"
+                        WaterStartDecision.BalanceUnavailable ->
+                            "完美校园登录未提供微信 openid，无法执行开水前余额检查。请确认校园卡余额充足后再继续。"
+                        is WaterStartDecision.Ready -> "确认开水吗？"
+                    },
+                )
+            },
             confirmButton = {
-                TextButton(onClick = waterViewModel::confirmLowBalanceStart) { Text("仍要开水") }
+                TextButton(onClick = waterViewModel::confirmStart) { Text("确认开水") }
             },
             dismissButton = {
-                TextButton(onClick = waterViewModel::dismissLowBalanceStart) { Text("取消") }
+                TextButton(onClick = waterViewModel::dismissStartConfirmation) { Text("取消") }
             },
         )
     }

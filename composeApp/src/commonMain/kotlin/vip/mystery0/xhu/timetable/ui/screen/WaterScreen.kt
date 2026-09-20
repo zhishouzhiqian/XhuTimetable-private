@@ -70,7 +70,7 @@ fun WaterScreen() {
     val balanceCents by viewModel.balanceCents.collectAsState()
     val records by viewModel.records.collectAsState()
     val lastCostCents by viewModel.lastCostCents.collectAsState()
-    val lowBalance by viewModel.lowBalanceConfirmation.collectAsState()
+    val startConfirmation by viewModel.startConfirmation.collectAsState()
     val authenticationRequest by viewModel.authenticationRequest.collectAsState()
     val perfectCampusLoginState by viewModel.perfectCampusLoginState.collectAsState()
 
@@ -185,16 +185,31 @@ fun WaterScreen() {
         }
     }
 
-    lowBalance?.let { balance ->
+    startConfirmation?.let { confirmation ->
         AlertDialog(
-            onDismissRequest = viewModel::dismissLowBalanceStart,
-            title = { Text("校园卡余额较低") },
-            text = { Text("当前余额 ¥${formatWaterCents(balance)}，低于 ¥2.00。仍要开水吗？") },
+            onDismissRequest = viewModel::dismissStartConfirmation,
+            title = {
+                Text(
+                    if (confirmation is WaterStartDecision.LowBalance) "校园卡余额较低"
+                    else "无法读取校园卡余额",
+                )
+            },
+            text = {
+                Text(
+                    when (confirmation) {
+                        is WaterStartDecision.LowBalance ->
+                            "当前余额 ¥${formatWaterCents(confirmation.balanceCents)}，低于 ¥2.00。仍要开水吗？"
+                        WaterStartDecision.BalanceUnavailable ->
+                            "完美校园登录未提供微信 openid，无法执行开水前余额检查。请确认校园卡余额充足后再继续。"
+                        is WaterStartDecision.Ready -> "确认开水吗？"
+                    },
+                )
+            },
             confirmButton = {
-                TextButton(onClick = viewModel::confirmLowBalanceStart) { Text("仍要开水") }
+                TextButton(onClick = viewModel::confirmStart) { Text("确认开水") }
             },
             dismissButton = {
-                TextButton(onClick = viewModel::dismissLowBalanceStart) { Text("取消") }
+                TextButton(onClick = viewModel::dismissStartConfirmation) { Text("取消") }
             },
         )
     }

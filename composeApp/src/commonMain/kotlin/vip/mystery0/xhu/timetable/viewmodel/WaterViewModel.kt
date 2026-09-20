@@ -26,8 +26,8 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
     val authenticationRequest = controller.authenticationRequest
     val perfectCampusLoginState = controller.perfectCampusLoginState
 
-    private val _lowBalanceConfirmation = MutableStateFlow<Long?>(null)
-    val lowBalanceConfirmation: StateFlow<Long?> = _lowBalanceConfirmation
+    private val _startConfirmation = MutableStateFlow<WaterStartDecision?>(null)
+    val startConfirmation: StateFlow<WaterStartDecision?> = _startConfirmation
 
     fun init() = launchHandled { controller.initialize() }
 
@@ -93,17 +93,19 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
     fun startWater() = launchHandled {
         when (val decision = controller.prepareStart()) {
             is WaterStartDecision.Ready -> controller.start()
-            is WaterStartDecision.LowBalance -> _lowBalanceConfirmation.value = decision.balanceCents
+            is WaterStartDecision.LowBalance,
+            WaterStartDecision.BalanceUnavailable -> _startConfirmation.value = decision
         }
     }
 
-    fun confirmLowBalanceStart() = launchHandled {
-        _lowBalanceConfirmation.value = null
+    fun confirmStart() = launchHandled {
+        _startConfirmation.value = null
+        controller.confirmPreparedStart()
         controller.start()
     }
 
-    fun dismissLowBalanceStart() {
-        _lowBalanceConfirmation.value = null
+    fun dismissStartConfirmation() {
+        _startConfirmation.value = null
         launchHandled { controller.cancelPreparedStart() }
     }
 

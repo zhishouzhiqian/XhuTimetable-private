@@ -28,7 +28,7 @@ class WaterRepository(
         ensureAuthenticated(value)
         ensureOnline()
         val userType = getUserType(value)
-        val balance = getBalance(value, userType)
+        val balance = if (value.canQueryBalance) getBalance(value, userType) else null
         val records = getUseWaterRecords(value)
         val running = getRunningState(value)
         return WaterOverview(balance, records, running)
