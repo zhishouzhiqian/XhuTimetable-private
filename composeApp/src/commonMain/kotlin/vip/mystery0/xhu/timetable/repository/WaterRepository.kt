@@ -161,7 +161,7 @@ class WaterRepository(
 
     private fun ensureAuthenticated(credentials: WaterCredentials) {
         if (!credentials.authenticated) {
-            throw WaterMissingParametersException("缺少 openid 或 JSESSIONID")
+            throw WaterMissingParametersException("缺少 JSESSIONID")
         }
     }
 

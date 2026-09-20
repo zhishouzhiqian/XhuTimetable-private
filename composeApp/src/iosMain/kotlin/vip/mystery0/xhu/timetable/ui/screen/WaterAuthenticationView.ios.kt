@@ -23,12 +23,14 @@ import platform.WebKit.WKWebsiteDataStore
 import platform.darwin.NSObject
 import org.koin.mp.KoinPlatform
 import vip.mystery0.xhu.timetable.model.water.WaterUiState
+import vip.mystery0.xhu.timetable.model.water.WaterAuthenticationRequest
 import vip.mystery0.xhu.timetable.water.WaterServiceController
 
 @OptIn(ExperimentalForeignApi::class)
 @Composable
 internal actual fun WaterAuthenticationView(
     modifier: Modifier,
+    request: WaterAuthenticationRequest,
     onAuthenticated: (openId: String, sessionId: String) -> Unit,
     onError: (String) -> Unit,
 ) {
@@ -62,7 +64,9 @@ internal actual fun WaterAuthenticationView(
                     currentOnError("官方认证需要扫码或绑定，请重新认证")
                     return@navigationFinished
                 }
-                val openId = extractWaterOpenId(url) ?: return@navigationFinished
+                val openId = extractWaterOpenId(url)
+                    ?: if (request.allowsEmptyOpenId && url.startsWith(WATER_AUTH_ORIGIN)) ""
+                    else return@navigationFinished
                 webView.configuration.websiteDataStore.httpCookieStore.getAllCookies { cookies ->
                     if (delivered) return@getAllCookies
                     val sessionId = cookies
@@ -101,12 +105,14 @@ internal actual fun WaterAuthenticationView(
             ).apply {
                 this.navigationDelegate = navigationDelegate
                 allowsBackForwardNavigationGestures = true
-                val url = NSURL(string = WATER_AUTH_ENTRY_URL)
+                val url = NSURL(string = request.entryUrl)
                 if (url == null) {
                     currentOnError("官方认证地址无效")
                 } else {
                     schoolSessionPersistence.restoreBeforeLoading(configuration.websiteDataStore.httpCookieStore) {
-                        if (automaticRecovery) deleteWaterSessionCookieAndLoad(this, url)
+                        if (automaticRecovery || request.replaceSessionCookie) {
+                            deleteWaterSessionCookieAndLoad(this, url)
+                        }
                         else loadRequest(NSMutableURLRequest.requestWithURL(url))
                     }
                 }
@@ -180,5 +186,6 @@ private val WATER_AUTH_ALLOWED_HOSTS = setOf(
     "xhyb.xhu.edu.cn",
     "api.szszcloud.cn",
     "open.weixin.qq.com",
+    "open.17wanxiao.com",
     WATER_HOST,
 )

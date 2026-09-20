@@ -12,7 +12,7 @@ data class WaterCredentials(
     val orgId: String = "2",
 ) {
     val authenticated: Boolean
-        get() = openId.isNotBlank() && sessionId.isNotBlank()
+        get() = sessionId.isNotBlank()
 
     val bound: Boolean
         get() = posCode.matches(Regex("\\d{6}")) && orgId.isNotBlank()
@@ -33,6 +33,28 @@ data class WaterCredentials(
         openId = openId,
         sessionId = sessionId,
     ).normalized()
+}
+
+enum class WaterAuthenticationSource { SchoolPage, PerfectCampus }
+
+data class WaterAuthenticationRequest(
+    val entryUrl: String,
+    val source: WaterAuthenticationSource,
+    val replaceSessionCookie: Boolean = false,
+) {
+    val allowsEmptyOpenId: Boolean
+        get() = source == WaterAuthenticationSource.PerfectCampus
+}
+
+sealed interface PerfectCampusLoginState {
+    data object Idle : PerfectCampusLoginState
+    data object SendingSms : PerfectCampusLoginState
+    data object SmsSent : PerfectCampusLoginState
+    data object Verifying : PerfectCampusLoginState
+    data class Error(
+        val message: String,
+        val canSubmitCode: Boolean,
+    ) : PerfectCampusLoginState
 }
 
 @Serializable

@@ -2,6 +2,7 @@ package vip.mystery0.xhu.timetable.ui.screen
 
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import vip.mystery0.xhu.timetable.model.water.WaterAuthenticationRequest
 
 internal const val WATER_AUTH_ENTRY_URL = "https://xhyb.xhu.edu.cn/short/hcXum6gj7Lc"
 internal const val WATER_AUTH_ORIGIN = "https://ecard.xhu.edu.cn"
@@ -9,6 +10,7 @@ internal const val WATER_AUTH_ORIGIN = "https://ecard.xhu.edu.cn"
 @Composable
 internal expect fun WaterAuthenticationView(
     modifier: Modifier,
+    request: WaterAuthenticationRequest,
     onAuthenticated: (openId: String, sessionId: String) -> Unit,
     onError: (String) -> Unit,
 )

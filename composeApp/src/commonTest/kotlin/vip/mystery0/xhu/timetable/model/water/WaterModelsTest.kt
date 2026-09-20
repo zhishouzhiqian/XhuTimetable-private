@@ -81,4 +81,17 @@ class WaterModelsTest {
             decideWaterQuickAction(configured, WaterUiState.Running("ok"), true),
         )
     }
+
+    @Test
+    fun perfectCampusSessionDoesNotRequireWechatOpenId() {
+        val credentials = WaterCredentials(
+            openId = "",
+            sessionId = "synthetic-session",
+            posCode = "123456",
+            orgId = "2",
+        )
+
+        assertTrue(credentials.authenticated)
+        assertTrue(credentials.configured)
+    }
 }

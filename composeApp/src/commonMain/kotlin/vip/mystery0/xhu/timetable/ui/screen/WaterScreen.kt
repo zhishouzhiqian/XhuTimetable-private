@@ -29,6 +29,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -43,6 +44,11 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import org.koin.compose.viewmodel.koinViewModel
 import vip.mystery0.xhu.timetable.base.HandleErrorMessage
+import vip.mystery0.xhu.timetable.Platform
+import vip.mystery0.xhu.timetable.platform
+import vip.mystery0.xhu.timetable.model.water.PerfectCampusLoginState
+import vip.mystery0.xhu.timetable.model.water.WaterAuthenticationRequest
+import vip.mystery0.xhu.timetable.model.water.WaterAuthenticationSource
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
 import vip.mystery0.xhu.timetable.model.water.WaterDevice
 import vip.mystery0.xhu.timetable.model.water.WaterUiState
@@ -65,6 +71,8 @@ fun WaterScreen() {
     val records by viewModel.records.collectAsState()
     val lastCostCents by viewModel.lastCostCents.collectAsState()
     val lowBalance by viewModel.lowBalanceConfirmation.collectAsState()
+    val authenticationRequest by viewModel.authenticationRequest.collectAsState()
+    val perfectCampusLoginState by viewModel.perfectCampusLoginState.collectAsState()
 
     var editing by remember { mutableStateOf(false) }
 
@@ -95,22 +103,27 @@ fun WaterScreen() {
             uiState == WaterUiState.RecoveringAuthentication
         ) {
             val automaticRecovery = uiState == WaterUiState.RecoveringAuthentication
-            WaterAuthenticationContent(
-                modifier = Modifier
-                    .padding(paddingValues)
-                    .fillMaxSize(),
-                onAuthenticated = viewModel::completeAuthentication,
-                automaticRecovery = automaticRecovery,
-                onCancel = if (automaticRecovery) {
-                    viewModel::failAuthenticationRecovery
-                } else {
-                    viewModel::cancelAuthentication
-                },
-                onError = if (automaticRecovery) {
-                    { viewModel.failAuthenticationRecovery() }
-                } else {
-                    viewModel::failAuthentication
-                },
+            authenticationRequest?.let { request ->
+                WaterAuthenticationContent(
+                    modifier = Modifier
+                        .padding(paddingValues)
+                        .fillMaxSize(),
+                    request = request,
+                    onAuthenticated = viewModel::completeAuthentication,
+                    automaticRecovery = automaticRecovery,
+                    onCancel = if (automaticRecovery) {
+                        viewModel::failAuthenticationRecovery
+                    } else {
+                        viewModel::cancelAuthentication
+                    },
+                    onError = if (automaticRecovery) {
+                        { viewModel.failAuthenticationRecovery() }
+                    } else {
+                        viewModel::failAuthentication
+                    },
+                )
+            } ?: CircularProgressIndicator(
+                modifier = Modifier.padding(paddingValues).padding(32.dp),
             )
         } else {
             Column(
@@ -137,6 +150,10 @@ fun WaterScreen() {
                             }
                         },
                         onAuthenticate = viewModel::startAuthentication,
+                        perfectCampusLoginState = perfectCampusLoginState,
+                        onRequestPerfectCampusSms = viewModel::requestPerfectCampusSms,
+                        onCompletePerfectCampusSms = viewModel::completePerfectCampusSms,
+                        onCancelPerfectCampusLogin = viewModel::cancelPerfectCampusLogin,
                         onCancel = if (credentials == null) null else ({ editing = false }),
                         onClear = if (credentials == null) null else ({ viewModel.clearCredentials() }),
                         onRefreshDevices = viewModel::refreshDevices,
@@ -261,6 +278,10 @@ private fun WaterCredentialsForm(
     uiState: WaterUiState,
     onSave: (String, String, String, String) -> Unit,
     onAuthenticate: () -> Unit,
+    perfectCampusLoginState: PerfectCampusLoginState,
+    onRequestPerfectCampusSms: (String) -> Unit,
+    onCompletePerfectCampusSms: (String) -> Unit,
+    onCancelPerfectCampusLogin: () -> Unit,
     onCancel: (() -> Unit)?,
     onClear: (() -> Unit)?,
     onRefreshDevices: () -> Unit,
@@ -270,6 +291,13 @@ private fun WaterCredentialsForm(
     var sessionId by remember(credentials) { mutableStateOf(credentials?.sessionId.orEmpty()) }
     var posCode by remember(credentials) { mutableStateOf(credentials?.posCode.orEmpty()) }
     var orgId by remember(credentials) { mutableStateOf(credentials?.orgId ?: "2") }
+    var perfectCampusExpanded by remember { mutableStateOf(false) }
+    var perfectCampusPhone by remember { mutableStateOf("") }
+    var perfectCampusSms by remember { mutableStateOf("") }
+
+    DisposableEffect(Unit) {
+        onDispose { onCancelPerfectCampusLogin() }
+    }
 
     Icon(
         painter = XhuIcons.Action.switch,
@@ -282,7 +310,7 @@ private fun WaterCredentialsForm(
         style = MaterialTheme.typography.headlineSmall,
     )
     Text(
-        text = "可通过学校官方页面认证并自动获取 openid 与 JSESSIONID。首次认证可能显示二维码，可截图后在微信扫一扫中从相册识别；手动导入仍作为兜底。",
+        text = "可通过学校官方页面获取 JSESSIONID；iOS 也可使用完美校园短信登录，保存可用于续登的会话。手动导入仍作为兜底。",
         modifier = Modifier.padding(vertical = 12.dp),
         color = MaterialTheme.colorScheme.outline,
         textAlign = TextAlign.Center,
@@ -290,7 +318,7 @@ private fun WaterCredentialsForm(
     )
     when (uiState) {
         WaterUiState.AuthExpired -> Text(
-            text = "认证已失效且自动续登未成功，旧的 openid 与 JSESSIONID 已清除；设备信息仍保留。请重新扫码认证。",
+            text = "认证已失效且自动续登未成功，旧的 openid 与 JSESSIONID 已清除；设备信息仍保留。请重新使用学校页面或完美校园短信登录。",
             modifier = Modifier.padding(bottom = 12.dp),
             color = MaterialTheme.colorScheme.error,
             textAlign = TextAlign.Center,
@@ -312,7 +340,7 @@ private fun WaterCredentialsForm(
         onValueChange = { openId = it.trim() },
         modifier = Modifier.fillMaxWidth(),
         label = { Text("openid") },
-        supportingText = { Text("需使用校园卡页面下发的 64 位 openid") },
+        supportingText = { Text("微信认证需要 64 位 openid；完美校园模式可留空") },
         visualTransformation = PasswordVisualTransformation(),
         singleLine = true,
     )
@@ -354,6 +382,85 @@ private fun WaterCredentialsForm(
         shape = RoundedCornerShape(24.dp),
     ) {
         Text("使用官方页面认证")
+    }
+    if (platform() == Platform.IOS) {
+        Spacer(Modifier.height(8.dp))
+        OutlinedButton(
+            onClick = {
+                perfectCampusExpanded = !perfectCampusExpanded
+                if (!perfectCampusExpanded) onCancelPerfectCampusLogin()
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(24.dp),
+        ) {
+            Text(if (perfectCampusExpanded) "收起完美校园登录" else "使用完美校园短信登录")
+        }
+        if (perfectCampusExpanded) {
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "手机号和验证码仅用于本次登录，不会保存；登录会话保存在 iOS Keychain。",
+                color = MaterialTheme.colorScheme.outline,
+                style = MaterialTheme.typography.bodySmall,
+                textAlign = TextAlign.Center,
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(
+                value = perfectCampusPhone,
+                onValueChange = { perfectCampusPhone = it.filter(Char::isDigit).take(11) },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("完美校园手机号") },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                singleLine = true,
+            )
+            Spacer(Modifier.height(8.dp))
+            Button(
+                onClick = { onRequestPerfectCampusSms(perfectCampusPhone) },
+                enabled = perfectCampusLoginState != PerfectCampusLoginState.SendingSms &&
+                        perfectCampusLoginState != PerfectCampusLoginState.Verifying,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (perfectCampusLoginState == PerfectCampusLoginState.SendingSms) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp))
+                } else {
+                    Text("发送短信验证码")
+                }
+            }
+            if (perfectCampusLoginState == PerfectCampusLoginState.SmsSent ||
+                (perfectCampusLoginState is PerfectCampusLoginState.Error &&
+                        perfectCampusLoginState.canSubmitCode)
+            ) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = perfectCampusSms,
+                    onValueChange = { perfectCampusSms = it.filter(Char::isDigit).take(8) },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("短信验证码") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(8.dp))
+                Button(
+                    onClick = { onCompletePerfectCampusSms(perfectCampusSms) },
+                    enabled = perfectCampusLoginState != PerfectCampusLoginState.Verifying,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("登录并建立用水会话")
+                }
+            }
+            when (perfectCampusLoginState) {
+                PerfectCampusLoginState.SmsSent -> Text(
+                    "验证码已发送",
+                    color = MaterialTheme.colorScheme.primary,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                is PerfectCampusLoginState.Error -> Text(
+                    perfectCampusLoginState.message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                else -> Unit
+            }
+        }
     }
     Spacer(Modifier.height(8.dp))
     Button(
@@ -407,6 +514,7 @@ private fun WaterCredentialsForm(
 @Composable
 private fun WaterAuthenticationContent(
     modifier: Modifier,
+    request: WaterAuthenticationRequest,
     onAuthenticated: (String, String) -> Unit,
     automaticRecovery: Boolean,
     onCancel: () -> Unit,
@@ -418,9 +526,17 @@ private fun WaterAuthenticationContent(
     ) {
         Text(
             text = if (automaticRecovery) {
-                "正在使用 iOS 中保留的学校登录状态自动续登。若登录中心要求交互，将停止恢复并提示重新扫码。"
+                if (request.source == WaterAuthenticationSource.PerfectCampus) {
+                    "正在使用 Keychain 中保留的完美校园会话重新建立 JSESSIONID。只会自动重试一次。"
+                } else {
+                    "正在使用 iOS 中保留的学校登录状态自动续登。若登录中心要求交互，将停止恢复。"
+                }
             } else {
-                "请在学校官方页面完成认证。若出现二维码，可截图后在微信扫一扫中从相册识别，再返回本页面。认证完成后会自动保存凭据。"
+                if (request.source == WaterAuthenticationSource.PerfectCampus) {
+                    "正在通过完美校园授权建立用水会话，完成后会自动保存 JSESSIONID。"
+                } else {
+                    "请在学校官方页面完成认证。若出现二维码，可截图后在微信扫一扫中从相册识别，再返回本页面。"
+                }
             },
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
             color = MaterialTheme.colorScheme.outline,
@@ -431,6 +547,7 @@ private fun WaterAuthenticationContent(
             modifier = Modifier
                 .fillMaxWidth()
                 .weight(1F),
+            request = request,
             onAuthenticated = onAuthenticated,
             onError = onError,
         )

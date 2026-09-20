@@ -23,6 +23,8 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
     val balanceCents = controller.balanceCents
     val records = controller.records
     val lastCostCents = controller.lastCostCents
+    val authenticationRequest = controller.authenticationRequest
+    val perfectCampusLoginState = controller.perfectCampusLoginState
 
     private val _lowBalanceConfirmation = MutableStateFlow<Long?>(null)
     val lowBalanceConfirmation: StateFlow<Long?> = _lowBalanceConfirmation
@@ -32,7 +34,6 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
     fun saveCredentials(openId: String, sessionId: String, posCode: String, orgId: String): Boolean {
         val value = WaterCredentials(openId, sessionId, posCode, orgId).normalized()
         val error = when {
-            value.openId.isBlank() -> "openid 不能为空"
             value.sessionId.isBlank() -> "JSESSIONID 不能为空"
             value.posCode.isNotBlank() && !value.posCode.matches(Regex("\\d{6}")) -> "设备号必须是 6 位数字"
             value.orgId.isBlank() -> "组织编号不能为空"
@@ -50,6 +51,26 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
     }
 
     fun startAuthentication() = controller.setAuthenticating()
+
+    fun requestPerfectCampusSms(phone: String) {
+        val normalized = phone.filter(Char::isDigit)
+        if (!normalized.matches(Regex("1\\d{10}"))) {
+            launchHandled { controller.handleError(WaterMissingParametersException("请输入 11 位手机号")) }
+            return
+        }
+        viewModelScope.launch { controller.requestPerfectCampusSms(normalized) }
+    }
+
+    fun completePerfectCampusSms(code: String) {
+        val normalized = code.filter(Char::isDigit)
+        if (normalized.isBlank()) {
+            launchHandled { controller.handleError(WaterMissingParametersException("请输入短信验证码")) }
+            return
+        }
+        viewModelScope.launch { controller.completePerfectCampusSms(normalized) }
+    }
+
+    fun cancelPerfectCampusLogin() = controller.cancelPerfectCampusLogin()
 
     fun completeAuthentication(openId: String, sessionId: String) =
         launchHandled { controller.saveAuthentication(openId, sessionId) }

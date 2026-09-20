@@ -14,6 +14,7 @@ object WaterStore {
     private const val LAST_KNOWN_RUNNING = "waterLastKnownRunning"
     private const val OPEN_ID = "openid"
     private const val SESSION_ID = "sessionId"
+    private const val PERFECT_CAMPUS_SESSION = "perfectCampusSession"
     private const val START_BALANCE_CENTS = "startBalanceCents"
     private const val EXIT_RECOVERY_PENDING = "waterExitRecoveryPending"
 
@@ -76,10 +77,23 @@ object WaterStore {
         removeLegacySecrets()
     }
 
+    suspend fun loadPerfectCampusSession(): String? = withContext(Dispatchers.IO) {
+        WaterSecureStore.get(PERFECT_CAMPUS_SESSION)?.takeIf(String::isNotBlank)
+    }
+
+    suspend fun savePerfectCampusSession(value: String) = withContext(Dispatchers.IO) {
+        WaterSecureStore.set(PERFECT_CAMPUS_SESSION, value)
+    }
+
+    suspend fun clearPerfectCampusSession() = withContext(Dispatchers.IO) {
+        WaterSecureStore.remove(PERFECT_CAMPUS_SESSION)
+    }
+
     suspend fun clearCredentials() = withContext(Dispatchers.IO) {
         WaterSecureStore.remove(WaterSchoolSession.STORAGE_KEY)
         WaterSecureStore.remove(OPEN_ID)
         WaterSecureStore.remove(SESSION_ID)
+        WaterSecureStore.remove(PERFECT_CAMPUS_SESSION)
         Store.UserStore.removeConfiguration(DEVICE_CONFIGURATION)
         Store.UserStore.removeConfiguration(LEGACY_CREDENTIALS)
         Store.UserStore.removeConfiguration(LAST_KNOWN_RUNNING)

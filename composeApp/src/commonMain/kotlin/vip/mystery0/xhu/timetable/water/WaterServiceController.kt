@@ -8,6 +8,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import vip.mystery0.xhu.timetable.config.store.WaterStore
+import vip.mystery0.xhu.timetable.base.publicDeviceId
+import vip.mystery0.xhu.timetable.model.water.PerfectCampusLoginState
+import vip.mystery0.xhu.timetable.model.water.WaterAuthenticationRequest
+import vip.mystery0.xhu.timetable.model.water.WaterAuthenticationSource
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
 import vip.mystery0.xhu.timetable.model.water.WaterDevice
 import vip.mystery0.xhu.timetable.model.water.WaterErrorType
@@ -20,8 +24,12 @@ import vip.mystery0.xhu.timetable.repository.WaterMissingParametersException
 import vip.mystery0.xhu.timetable.repository.WaterNetworkException
 import vip.mystery0.xhu.timetable.repository.WaterRepository
 import vip.mystery0.xhu.timetable.repository.WaterUnknownResponseException
+import vip.mystery0.xhu.timetable.repository.PerfectCampusRepository
 
-class WaterServiceController(private val repository: WaterRepository) {
+class WaterServiceController(
+    private val repository: WaterRepository,
+    private val perfectCampusRepository: PerfectCampusRepository,
+) {
     private val mutex = Mutex()
     private var initialized = false
     private var authenticationRecovery: CompletableDeferred<Boolean>? = null
@@ -40,6 +48,10 @@ class WaterServiceController(private val repository: WaterRepository) {
     val records: StateFlow<List<WaterUseRecord>> = _records
     private val _lastCostCents = MutableStateFlow<Long?>(null)
     val lastCostCents: StateFlow<Long?> = _lastCostCents
+    private val _authenticationRequest = MutableStateFlow<WaterAuthenticationRequest?>(null)
+    val authenticationRequest: StateFlow<WaterAuthenticationRequest?> = _authenticationRequest
+    private val _perfectCampusLoginState = MutableStateFlow<PerfectCampusLoginState>(PerfectCampusLoginState.Idle)
+    val perfectCampusLoginState: StateFlow<PerfectCampusLoginState> = _perfectCampusLoginState
 
     suspend fun initialize() = mutex.withLock {
         if (initialized) return
@@ -82,6 +94,8 @@ class WaterServiceController(private val repository: WaterRepository) {
         if (!updated.authenticated) throw WaterMissingParametersException("官方认证未返回完整凭据")
         WaterStore.saveCredentials(updated)
         _credentials.value = updated
+        _authenticationRequest.value = null
+        _perfectCampusLoginState.value = PerfectCampusLoginState.Idle
         val recovery = authenticationRecovery
         if (recovery == null) {
             if (updated.bound) refreshOverviewLocked(updated) else refreshDevicesLocked(updated)
@@ -95,6 +109,16 @@ class WaterServiceController(private val repository: WaterRepository) {
         val recovery = mutex.withLock {
             authenticationRecovery ?: CompletableDeferred<Boolean>().also {
                 authenticationRecovery = it
+                val perfectCampusSession = WaterStore.loadPerfectCampusSession()
+                _authenticationRequest.value = if (perfectCampusSession == null) {
+                    schoolAuthenticationRequest(replaceSessionCookie = true)
+                } else {
+                    WaterAuthenticationRequest(
+                        entryUrl = perfectCampusRepository.authorizationUrl(perfectCampusSession),
+                        source = WaterAuthenticationSource.PerfectCampus,
+                        replaceSessionCookie = true,
+                    )
+                }
                 _uiState.value = WaterUiState.RecoveringAuthentication
             }
         }
@@ -103,7 +127,13 @@ class WaterServiceController(private val repository: WaterRepository) {
         } ?: false
         if (!recovered) {
             mutex.withLock {
-                if (authenticationRecovery === recovery) authenticationRecovery = null
+                if (authenticationRecovery === recovery) {
+                    authenticationRecovery = null
+                    if (_authenticationRequest.value?.source == WaterAuthenticationSource.PerfectCampus) {
+                        WaterStore.clearPerfectCampusSession()
+                    }
+                    _authenticationRequest.value = null
+                }
             }
         }
         return recovered
@@ -111,9 +141,51 @@ class WaterServiceController(private val repository: WaterRepository) {
 
     suspend fun failAuthenticationRecovery() {
         val recovery = mutex.withLock {
+            if (_authenticationRequest.value?.source == WaterAuthenticationSource.PerfectCampus) {
+                WaterStore.clearPerfectCampusSession()
+            }
+            _authenticationRequest.value = null
             authenticationRecovery.also { authenticationRecovery = null }
         }
         recovery?.complete(false)
+    }
+
+    suspend fun requestPerfectCampusSms(phone: String) {
+        _perfectCampusLoginState.value = PerfectCampusLoginState.SendingSms
+        try {
+            perfectCampusRepository.requestSms(phone, publicDeviceId())
+            _perfectCampusLoginState.value = PerfectCampusLoginState.SmsSent
+        } catch (error: Throwable) {
+            _perfectCampusLoginState.value = PerfectCampusLoginState.Error(
+                error.message?.takeIf(String::isNotBlank) ?: "验证码发送失败",
+                canSubmitCode = false,
+            )
+        }
+    }
+
+    suspend fun completePerfectCampusSms(code: String) {
+        _perfectCampusLoginState.value = PerfectCampusLoginState.Verifying
+        try {
+            val session = perfectCampusRepository.completeSms(code)
+            WaterStore.savePerfectCampusSession(session)
+            _authenticationRequest.value = WaterAuthenticationRequest(
+                entryUrl = perfectCampusRepository.authorizationUrl(session),
+                source = WaterAuthenticationSource.PerfectCampus,
+                replaceSessionCookie = true,
+            )
+            _perfectCampusLoginState.value = PerfectCampusLoginState.Idle
+            _uiState.value = WaterUiState.Authenticating
+        } catch (error: Throwable) {
+            _perfectCampusLoginState.value = PerfectCampusLoginState.Error(
+                error.message?.takeIf(String::isNotBlank) ?: "验证码校验失败",
+                canSubmitCode = true,
+            )
+        }
+    }
+
+    fun cancelPerfectCampusLogin() {
+        perfectCampusRepository.cancelLogin()
+        _perfectCampusLoginState.value = PerfectCampusLoginState.Idle
     }
 
     suspend fun selectDevice(device: WaterDevice) = mutex.withLock {
@@ -132,6 +204,8 @@ class WaterServiceController(private val repository: WaterRepository) {
         WaterStore.setStartBalanceCents(null)
         WaterStore.setExitRecoveryPending(false)
         _credentials.value = null
+        _authenticationRequest.value = null
+        _perfectCampusLoginState.value = PerfectCampusLoginState.Idle
         _devices.value = emptyList()
         _balanceCents.value = null
         _records.value = emptyList()
@@ -180,7 +254,10 @@ class WaterServiceController(private val repository: WaterRepository) {
         true
     }
 
-    fun setAuthenticating() { _uiState.value = WaterUiState.Authenticating }
+    fun setAuthenticating() {
+        _authenticationRequest.value = schoolAuthenticationRequest(replaceSessionCookie = false)
+        _uiState.value = WaterUiState.Authenticating
+    }
 
     suspend fun cancelPreparedStart() {
         if (!_running.value) WaterStore.setStartBalanceCents(null)
@@ -196,6 +273,7 @@ class WaterServiceController(private val repository: WaterRepository) {
                 authenticationRecovery = null
                 WaterStore.clearAuthentication()
                 _credentials.value = _credentials.value?.copy(openId = "", sessionId = "")
+                _authenticationRequest.value = null
                 WaterUiState.AuthExpired
             }
             is WaterNetworkException -> WaterUiState.Error(WaterErrorType.Network, error.message.orEmpty())
@@ -284,6 +362,14 @@ class WaterServiceController(private val repository: WaterRepository) {
         const val LOW_BALANCE_CENTS = 200L
         private const val DEFAULT_ORG_ID = "2"
         private const val AUTHENTICATION_RECOVERY_TIMEOUT_MILLIS = 45_000L
+        private const val SCHOOL_AUTH_ENTRY_URL = "https://xhyb.xhu.edu.cn/short/hcXum6gj7Lc"
+
+        private fun schoolAuthenticationRequest(replaceSessionCookie: Boolean) =
+            WaterAuthenticationRequest(
+                entryUrl = SCHOOL_AUTH_ENTRY_URL,
+                source = WaterAuthenticationSource.SchoolPage,
+                replaceSessionCookie = replaceSessionCookie,
+            )
     }
 }
 
