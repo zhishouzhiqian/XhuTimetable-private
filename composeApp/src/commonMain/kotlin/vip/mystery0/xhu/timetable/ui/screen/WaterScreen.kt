@@ -308,7 +308,6 @@ private fun WaterCredentialsForm(
     var perfectCampusExpanded by remember { mutableStateOf(false) }
     var perfectCampusPhone by remember { mutableStateOf("") }
     var perfectCampusSms by remember { mutableStateOf("") }
-    var advancedExpanded by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         onDispose { onCancelPerfectCampusLogin() }
@@ -344,10 +343,6 @@ private fun WaterCredentialsForm(
 
         else -> Unit
     }
-    TextButton(onClick = { advancedExpanded = !advancedExpanded }) {
-        Text(if (advancedExpanded) "收起高级设置" else "高级设置")
-    }
-    if (advancedExpanded) {
     OutlinedTextField(
         value = openId,
         onValueChange = { openId = it.trim() },
@@ -389,7 +384,6 @@ private fun WaterCredentialsForm(
         singleLine = true,
     )
     Spacer(Modifier.height(20.dp))
-    }
     Button(
         onClick = onAuthenticate,
         modifier = Modifier.fillMaxWidth(),
@@ -477,7 +471,7 @@ private fun WaterCredentialsForm(
         }
     }
     Spacer(Modifier.height(8.dp))
-    if (advancedExpanded) Button(
+    Button(
         onClick = { onSave(openId, sessionId, posCode, orgId) },
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
