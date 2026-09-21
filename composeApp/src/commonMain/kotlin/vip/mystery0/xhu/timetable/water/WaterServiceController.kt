@@ -38,6 +38,7 @@ class WaterServiceController(
     private var authenticationRecovery: CompletableDeferred<Boolean>? = null
     private var startPrepared = false
     private var startConfirmationPending = false
+    private var commandRevision = 0L
 
     private val _uiState = MutableStateFlow<WaterUiState>(WaterUiState.Loading)
     val uiState: StateFlow<WaterUiState> = _uiState
@@ -270,6 +271,7 @@ class WaterServiceController(
             throw WaterMissingParametersException("请先完成开水前确认")
         }
         _uiState.value = WaterUiState.Starting
+        commandRevision++
         // 请求可能已经到达设备；网关错误时只核实状态，绝不重复发送开阀。
         WaterStore.setExitRecoveryPending(true)
         try {
@@ -377,7 +379,7 @@ class WaterServiceController(
 
     private suspend fun stopLocked(value: WaterCredentials) {
         _uiState.value = WaterUiState.Stopping
-        val previousRecord = _records.value.firstOrNull { it.posCode == value.posCode }
+        commandRevision++
         executeWaterCommandWithReconciliation(
             command = { repository.stopWater(value) },
             readRunning = { repository.getRunningState(value) },
@@ -385,28 +387,45 @@ class WaterServiceController(
         )
         markStopped()
         _uiState.value = WaterUiState.Ready
-        var latestRecords = _records.value
-        var latestRecord = previousRecord
-        for (attempt in 0 until 3) {
-            if (attempt > 0) delay(900)
-            latestRecords = runCatching {
-                repository.getUseWaterRecords(value)
-            }.getOrDefault(latestRecords)
-            latestRecord = latestRecords.firstOrNull { it.posCode == value.posCode }
-            if (latestRecord != null && latestRecord != previousRecord) break
-        }
-        _records.value = latestRecords
-        _lastCostCents.value = latestRecord
-            ?.takeIf { it != previousRecord }
-            ?.amountFen
-        runCatching {
-            if (value.canQueryBalance) repository.getBalance(value) else getPerfectCampusBalance()
-        }
-                .getOrNull()
-                ?.let { _balanceCents.value = it }
-        markStopped()
-        _uiState.value = WaterUiState.Ready
     }
+
+    // 查询不持有操作锁，也不改动开关状态；旧操作的结果不能覆盖新操作。
+    suspend fun refreshAccountAfterCommand() {
+        val snapshot = mutex.withLock {
+            val value = _credentials.value ?: return
+            Triple(value, commandRevision, _running.value)
+        }
+        val (value, revision, running) = snapshot
+        if (!running) delay(900)
+        val (balance, records) = coroutineScope {
+            val balance = async {
+                optionalAccountQuery {
+                    if (value.canQueryBalance) repository.getBalance(value) else getPerfectCampusBalance()
+                }
+            }
+            val records = async { optionalAccountQuery { repository.getUseWaterRecords(value) } }
+            balance.await() to records.await()
+        }
+        mutex.withLock {
+            if (commandRevision != revision || _credentials.value != value) return@withLock
+            _balanceCents.value = balance
+            if (records != null) {
+                val previous = _records.value.firstOrNull { it.posCode == value.posCode }
+                _records.value = records.take(100)
+                if (!running) {
+                    _lastCostCents.value = records.firstOrNull { it.posCode == value.posCode }
+                        ?.takeIf { it != previous }?.amountFen
+                }
+            }
+        }
+    }
+
+    private suspend fun <T> optionalAccountQuery(block: suspend () -> T): T? =
+        withTimeoutOrNull(4_000L) {
+            try { block() }
+            catch (error: CancellationException) { throw error }
+            catch (_: Exception) { null }
+        }
 
     private suspend fun markStopped() {
         _running.value = false

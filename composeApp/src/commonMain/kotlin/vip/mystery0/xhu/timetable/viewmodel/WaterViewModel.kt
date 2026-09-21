@@ -3,10 +3,11 @@ package vip.mystery0.xhu.timetable.viewmodel
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.CancellationException
-import vip.mystery0.xhu.timetable.Platform
-import vip.mystery0.xhu.timetable.platform
+import vip.mystery0.xhu.timetable.model.water.WaterUiState
 import vip.mystery0.xhu.timetable.base.ComposeViewModel
 import vip.mystery0.xhu.timetable.model.water.WaterCredentials
 import vip.mystery0.xhu.timetable.model.water.WaterDevice
@@ -26,6 +27,8 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
     val lastCostCents = controller.lastCostCents
     val authenticationRequest = controller.authenticationRequest
     val perfectCampusLoginState = controller.perfectCampusLoginState
+    private val _actionInProgress = MutableStateFlow(false)
+    val actionInProgress: StateFlow<Boolean> = _actionInProgress
 
     private val _startConfirmation = MutableStateFlow<WaterStartDecision?>(null)
     val startConfirmation: StateFlow<WaterStartDecision?> = _startConfirmation
@@ -93,18 +96,42 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
     fun selectDevice(device: WaterDevice) = launchHandled { controller.selectDevice(device) }
     fun clearCredentials() = launchHandled { controller.clearCredentials() }
 
-    fun startWater() = launchHandled {
+    fun startWater() = launchHandled(userAction = true) { performStart() }
+
+    fun toggleWater() = launchHandled(userAction = true) {
+        controller.initialize()
+        val ready = withTimeoutOrNull(50_000L) {
+            uiState.first {
+                it != WaterUiState.Loading && it != WaterUiState.RecoveringAuthentication &&
+                        it != WaterUiState.Authenticating
+            }
+        }
+        if (ready == null) throw WaterUnknownResponseException("加载超时，请稍后重试")
+        if (credentials.value?.configured != true) {
+            throw WaterMissingParametersException("请先登录并选择用水设备")
+        }
+        if (lastKnownRunning.value) {
+            controller.stop()
+            commandCompleted("关水成功")
+        } else performStart()
+    }
+
+    private suspend fun performStart() {
         when (val decision = controller.prepareStart()) {
-            is WaterStartDecision.Ready -> controller.start()
+            is WaterStartDecision.Ready -> {
+                controller.start()
+                commandCompleted("开水成功")
+            }
             is WaterStartDecision.LowBalance,
             WaterStartDecision.BalanceUnavailable -> _startConfirmation.value = decision
         }
     }
 
-    fun confirmStart() = launchHandled {
+    fun confirmStart() = launchHandled(userAction = true) {
         _startConfirmation.value = null
         controller.confirmPreparedStart()
         controller.start()
+        commandCompleted("开水成功")
     }
 
     fun dismissStartConfirmation() {
@@ -112,30 +139,37 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
         launchHandled { controller.cancelPreparedStart() }
     }
 
-    fun stopWater() = launchHandled {
+    fun stopWater() = launchHandled(userAction = true) {
         controller.stop()
-        toastMessage("关水成功")
+        commandCompleted("关水成功")
+    }
+
+    private fun commandCompleted(message: String) {
+        toastMessage(message)
+        viewModelScope.launch { controller.refreshAccountAfterCommand() }
     }
 
     private fun launchHandled(
         retryOperation: (suspend () -> Unit)? = null,
+        userAction: Boolean = false,
         block: suspend () -> Unit,
     ) {
+        if (userAction && _actionInProgress.value) return
+        if (userAction) _actionInProgress.value = true
         viewModelScope.launch {
             try {
-                if (platform() == Platform.IOS) {
-                    retryOnceAfterWaterAuthenticationExpired(
-                        operation = block,
-                        recover = controller::requestAuthenticationRecovery,
-                        retryOperation = retryOperation ?: block,
-                    )
-                } else {
-                    block()
-                }
+                retryOnceAfterWaterAuthenticationExpired(
+                    operation = block,
+                    recover = controller::requestAuthenticationRecovery,
+                    retryOperation = retryOperation ?: block,
+                )
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Throwable) {
                 controller.handleError(error)
+                if (userAction) toastMessage(error.message ?: "操作失败，请重试")
+            } finally {
+                if (userAction) _actionInProgress.value = false
             }
         }
     }

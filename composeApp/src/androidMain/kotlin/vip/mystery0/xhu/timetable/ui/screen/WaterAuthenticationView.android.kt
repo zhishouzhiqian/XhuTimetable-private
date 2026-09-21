@@ -17,6 +17,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import vip.mystery0.xhu.timetable.model.water.WaterAuthenticationRequest
+import vip.mystery0.xhu.timetable.model.water.WaterUiState
+import vip.mystery0.xhu.timetable.water.WaterServiceController
+import org.koin.mp.KoinPlatform
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -29,6 +32,9 @@ internal actual fun WaterAuthenticationView(
     val currentOnAuthenticated by rememberUpdatedState(onAuthenticated)
     val currentOnError by rememberUpdatedState(onError)
     var delivered by remember { mutableStateOf(false) }
+    val automaticRecovery = remember {
+        KoinPlatform.getKoin().get<WaterServiceController>().uiState.value == WaterUiState.RecoveringAuthentication
+    }
 
     AndroidView(
         factory = { context ->
@@ -61,6 +67,12 @@ internal actual fun WaterAuthenticationView(
 
                     override fun onPageFinished(view: WebView, url: String?) {
                         super.onPageFinished(view, url)
+                        if (!delivered && automaticRecovery && url != null && requiresWaterAuthenticationInteraction(url)) {
+                            delivered = true
+                            view.stopLoading()
+                            currentOnError("请重新登录")
+                            return
+                        }
                         captureCredentials(url)
                     }
 

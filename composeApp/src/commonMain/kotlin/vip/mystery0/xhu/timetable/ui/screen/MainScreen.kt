@@ -30,6 +30,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -206,6 +207,19 @@ fun MainScreen() {
     }
 
     HandleErrorMessage(flow = viewModel.errorMessage)
+    HandleErrorMessage(flow = waterViewModel.errorMessage)
+    val waterState by waterViewModel.uiState.collectAsState()
+    val authenticationRequest by waterViewModel.authenticationRequest.collectAsState()
+    if (waterState == WaterUiState.RecoveringAuthentication) {
+        authenticationRequest?.let { request ->
+            WaterAuthenticationView(
+                modifier = Modifier.size(1.dp).alpha(0F),
+                request = request,
+                onAuthenticated = waterViewModel::completeAuthentication,
+                onError = { waterViewModel.failAuthenticationRecovery() },
+            )
+        }
+    }
     val emptyUser by viewModel.emptyUser.collectAsState()
     if (emptyUser) {
         navController.replaceTo<RouteMain>(RouteLogin(false))
@@ -227,7 +241,7 @@ fun MainScreen() {
                         is WaterStartDecision.LowBalance ->
                             "当前余额 ¥${formatWaterCents(confirmation.balanceCents)}，低于 ¥2.00。仍要开水吗？"
                         WaterStartDecision.BalanceUnavailable ->
-                            "完美校园登录未提供微信 openid，无法执行开水前余额检查。请确认校园卡余额充足后再继续。"
+                            "暂时无法读取余额，请确认校园卡余额充足后再继续。"
                         is WaterStartDecision.Ready -> "确认开水吗？"
                     },
                 )
@@ -247,18 +261,19 @@ private fun WaterQuickControl(viewModel: WaterViewModel, openDetails: () -> Unit
     val state by viewModel.uiState.collectAsState()
     val credentials by viewModel.credentials.collectAsState()
     val running by viewModel.lastKnownRunning.collectAsState()
-    val busy = state == WaterUiState.Loading || state == WaterUiState.Starting ||
-            state == WaterUiState.Stopping || state == WaterUiState.Authenticating ||
-            state == WaterUiState.RecoveringAuthentication
+    val actionInProgress by viewModel.actionInProgress.collectAsState()
+    val busy = actionInProgress || state == WaterUiState.Starting || state == WaterUiState.Stopping
     val action = decideWaterQuickAction(credentials, state, running)
     Box(
         modifier = Modifier
             .clickable(enabled = !busy) {
                 when (action) {
                     WaterQuickAction.NavigateToDetails -> openDetails()
-                    WaterQuickAction.Start -> viewModel.startWater()
-                    WaterQuickAction.Stop -> viewModel.stopWater()
-                    WaterQuickAction.Wait -> Unit
+                    WaterQuickAction.Start, WaterQuickAction.Stop -> viewModel.toggleWater()
+                    WaterQuickAction.Wait -> {
+                        if (state == WaterUiState.Authenticating) openDetails()
+                        else viewModel.toggleWater()
+                    }
                 }
             }
             .padding(horizontal = 8.dp),

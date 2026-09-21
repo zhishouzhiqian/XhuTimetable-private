@@ -58,7 +58,7 @@ class WaterRepository(
                 response.resultData?.result,
                 response.resultData?.message.orEmpty().ifBlank { response.message.orEmpty() },
             )
-            response.resultData?.data.orEmpty().sortedByDescending { it.beginTime }
+            response.resultData?.data.orEmpty().sortedByDescending { it.beginTime }.take(100)
         }
     }
 
