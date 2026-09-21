@@ -4,6 +4,8 @@ import io.ktor.client.plugins.ClientRequestException
 import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.plugins.ResponseException
 import io.ktor.http.HttpStatusCode
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -27,11 +29,12 @@ class WaterRepository(
         val value = credentials.normalized()
         ensureAuthenticated(value)
         ensureOnline()
-        val userType = getUserType(value)
-        val balance = if (value.canQueryBalance) getBalance(value, userType) else null
-        val records = getUseWaterRecords(value)
-        val running = getRunningState(value)
-        return WaterOverview(balance, records, running)
+        return coroutineScope {
+            val balance = async { if (value.canQueryBalance) getBalance(value) else null }
+            val records = async { getUseWaterRecords(value) }
+            val running = async { getRunningState(value) }
+            WaterOverview(balance.await(), records.await(), running.await())
+        }
     }
 
     suspend fun getBalance(credentials: WaterCredentials): Long {

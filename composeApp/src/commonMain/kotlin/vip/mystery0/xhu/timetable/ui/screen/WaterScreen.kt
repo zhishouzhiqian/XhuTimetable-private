@@ -626,7 +626,7 @@ private fun WaterControl(
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
             Column(modifier = Modifier.weight(1F)) {
-                Text(if (running) "水阀已开启" else "水阀已关闭")
+                Text(if (running && uiState is WaterUiState.Error) "水阀可能已开启，可直接关水" else if (running) "水阀已开启" else "水阀已关闭")
                 Text(
                     text = "状态来自服务端未关阀记录",
                     color = MaterialTheme.colorScheme.outline,

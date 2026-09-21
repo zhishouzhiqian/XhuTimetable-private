@@ -12,6 +12,25 @@ import vip.mystery0.xhu.timetable.repository.WaterAuthExpiredException
 
 class WaterAuthenticationRecoveryTest {
     @Test
+    fun initializationRecoveryRefreshesInsteadOfRepeatingOneShotInitialization() {
+        var initialized = false
+        var refreshes = 0
+        runImmediateSuspend {
+            retryOnceAfterWaterAuthenticationExpired(
+                operation = {
+                    if (!initialized) {
+                        initialized = true
+                        throw WaterAuthExpiredException()
+                    }
+                },
+                recover = { true },
+                retryOperation = { refreshes++ },
+            )
+        }.getOrThrow()
+        assertEquals(1, refreshes)
+    }
+
+    @Test
     fun retryDoesNotOverwriteRecoveredSessionWithSubmittedCredentials() {
         var session = "synthetic-old"
         var saves = 0

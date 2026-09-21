@@ -1,6 +1,9 @@
 package vip.mystery0.xhu.timetable.water
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -79,6 +82,11 @@ class WaterServiceController(
         refreshOverviewLocked(value)
     }
 
+    suspend fun refreshAfterAuthentication() = mutex.withLock {
+        val value = authenticatedCredentials() ?: return@withLock
+        if (value.bound) refreshOverviewLocked(value) else refreshDevicesLocked(value)
+    }
+
     suspend fun refreshDevices() = mutex.withLock {
         val value = authenticatedCredentials() ?: return
         refreshDevicesLocked(value)
@@ -103,6 +111,7 @@ class WaterServiceController(
             if (updated.bound) refreshOverviewLocked(updated) else refreshDevicesLocked(updated)
         } else {
             authenticationRecovery = null
+            _uiState.value = if (updated.bound) WaterUiState.Ready else WaterUiState.NotBound
             recovery.complete(true)
         }
     }
@@ -228,6 +237,7 @@ class WaterServiceController(
             getPerfectCampusBalance()
         }
         if (balance == null) {
+            _balanceCents.value = null
             startConfirmationPending = true
             _uiState.value = WaterUiState.Ready
             return@withLock WaterStartDecision.BalanceUnavailable
@@ -260,7 +270,20 @@ class WaterServiceController(
             throw WaterMissingParametersException("请先完成开水前确认")
         }
         _uiState.value = WaterUiState.Starting
-        repository.startWater(value)
+        // 请求可能已经到达设备；网关错误时只核实状态，绝不重复发送开阀。
+        WaterStore.setExitRecoveryPending(true)
+        try {
+            executeWaterCommandWithReconciliation(
+                command = { repository.startWater(value) },
+                readRunning = { repository.getRunningState(value) },
+                expectedRunning = true,
+            )
+        } catch (error: WaterCommandUncertainException) {
+            _running.value = true
+            WaterStore.setLastKnownRunning(true)
+            platformSetWaterRunning(true)
+            throw error
+        }
         startPrepared = false
         startConfirmationPending = false
         _running.value = true
@@ -325,8 +348,11 @@ class WaterServiceController(
 
     private suspend fun refreshOverviewLocked(value: WaterCredentials) {
         _uiState.value = WaterUiState.Loading
-        val overview = repository.getOverview(value)
-        _balanceCents.value = overview.balanceCents ?: getPerfectCampusBalance()
+        val (overview, perfectCampusBalance) = coroutineScope {
+            val balance = async { if (!value.canQueryBalance) getPerfectCampusBalance() else null }
+            repository.getOverview(value) to balance.await()
+        }
+        _balanceCents.value = overview.balanceCents ?: perfectCampusBalance
         _records.value = overview.records
         _running.value = overview.running
         WaterStore.setLastKnownRunning(overview.running)
@@ -352,7 +378,13 @@ class WaterServiceController(
     private suspend fun stopLocked(value: WaterCredentials) {
         _uiState.value = WaterUiState.Stopping
         val previousRecord = _records.value.firstOrNull { it.posCode == value.posCode }
-        repository.stopWater(value)
+        executeWaterCommandWithReconciliation(
+            command = { repository.stopWater(value) },
+            readRunning = { repository.getRunningState(value) },
+            expectedRunning = false,
+        )
+        markStopped()
+        _uiState.value = WaterUiState.Ready
         var latestRecords = _records.value
         var latestRecord = previousRecord
         for (attempt in 0 until 3) {
@@ -388,7 +420,15 @@ class WaterServiceController(
 
     private suspend fun getPerfectCampusBalance(): Long? {
         val session = WaterStore.loadPerfectCampusSession() ?: return null
-        return runCatching { perfectCampusRepository.getBalance(session) }.getOrNull()
+        return withTimeoutOrNull(4_000L) {
+            try {
+                perfectCampusRepository.getBalance(session)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                null
+            }
+        }
     }
 
     private fun authenticatedCredentials(): WaterCredentials? {

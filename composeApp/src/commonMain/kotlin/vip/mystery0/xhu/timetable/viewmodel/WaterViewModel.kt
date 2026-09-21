@@ -4,6 +4,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
 import vip.mystery0.xhu.timetable.Platform
 import vip.mystery0.xhu.timetable.platform
 import vip.mystery0.xhu.timetable.base.ComposeViewModel
@@ -29,7 +30,9 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
     private val _startConfirmation = MutableStateFlow<WaterStartDecision?>(null)
     val startConfirmation: StateFlow<WaterStartDecision?> = _startConfirmation
 
-    fun init() = launchHandled { controller.initialize() }
+    fun init() = launchHandled(retryOperation = { controller.refreshAfterAuthentication() }) {
+        controller.initialize()
+    }
 
     fun saveCredentials(openId: String, sessionId: String, posCode: String, orgId: String): Boolean {
         val value = WaterCredentials(openId, sessionId, posCode, orgId).normalized()
@@ -129,6 +132,8 @@ class WaterViewModel(private val controller: WaterServiceController) : ComposeVi
                 } else {
                     block()
                 }
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: Throwable) {
                 controller.handleError(error)
             }
