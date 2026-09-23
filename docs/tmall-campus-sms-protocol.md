@@ -17,6 +17,8 @@
 
 APK 含九份 DEX、`libsgcore.so`、`libsgmain.so`、`libsgmainso-6.8.260602.so` 及 `yw_1222.jpg`。静态方法引用表明 `mtopsdk.security.InnerSignImpl`、`ProductSignImpl`、`OpenSignImpl` 的 `getMtopApiSign` 最终调用 `SecurityGuardManager.getSecureSignatureComp().signRequest(...)`；相关实现还调用安全组件产生附加请求字段。这证明 APK 中存在原生签名链路，但**尚未证明该 SDK 能在西瓜课表的包名、签名证书和设备环境中独立初始化，也不能据此得出签名算法或将 APK 组件直接搬入项目**。
 
+进一步检查到天猫校园的 `MtopInitJob` 创建 MTOP 实例后，使用 `FixInnerMtopInitTask` 替换初始化任务；该类继承 `InnerMtopInitTask`，对应 `InnerSignImpl`。这比仅从 APK 中存在多个签名类推断更具体，但仍不能确定原生实现是否接受其他应用的上下文。
+
 另用全新、无 Cookie 的临时客户端对公开 H5 路径做了空数据探测：`mtop.common.getTimestamp` 返回 `SUCCESS`，同一路径形式的 `mtop.taobao.mloginservice.smssend` 返回 `RGV587_ERROR`。探测不携带手机号、验证码或既有会话，未触发短信。此结果不足以证明 H5 登录路径可用，也不能证明它永久不可用；不应把该路径作为已经验证的替代实现。
 
 ## 已观察的请求结构
@@ -40,6 +42,8 @@ APK 含九份 DEX、`libsgcore.so`、`libsgmain.so`、`libsgmainso-6.8.260602.so
 5. 获取真实洗衣二维码、设备详情、订单、付款后运行状态和完成状态的脱敏抓包，再确定设备识别与剩余时间字段。现有 HAR 不包含这些请求。
 
 现有 Android 洗衣实现使用官方 WebView 登录页及页面内 `lib.mtop` 查询，当前分支中的该登录已失败，且不符合独立短信登录的目标。`mtop.tmall.campus.share.applet.general.user.urgent.order.list` 和 `mtop.tmall.campus.share.applet.general.order.detail.get` 仅是已有代码中的候选接口，本 HAR 未验证。iOS 洗衣功能仍未启用。按“先验证协议，再接入业务”的顺序，本次调查不把现有 WebView 路径改称为独立登录，也不接入未经验证的洗衣请求。
+
+Debug 构建增加了一个隔离探针，仅检查装在模拟器中的 SDK 在本应用上下文及原应用上下文中能否初始化签名组件。代码不包含 APK、原生库、资源、手机号或会话。首次推送到 `personal-private` 后，GitHub Actions 在分配运行器前失败；检查注释为账户付款失败或 Actions 支出上限，构建和探针均未执行。这是 CI 环境阻断，不能解释为签名验证失败。
 
 ## 下一次验证所需材料
 
