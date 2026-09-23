@@ -83,13 +83,6 @@ kotlin {
             implementation(libs.mmkv.android)
             //accompanist
             implementation(libs.accompanist.permissions)
-            //camera / QR scanner
-            implementation(libs.androidx.camera.view)
-            implementation(libs.androidx.camera.lifecycle)
-            implementation(libs.androidx.camera.camera2)
-            implementation(libs.androidx.camera.mlkit.vision)
-            implementation(libs.mlkit.barcode.scanning)
-            implementation(libs.androidx.webkit)
             //apache-compress
             implementation(libs.apache.compress)
             //jpush

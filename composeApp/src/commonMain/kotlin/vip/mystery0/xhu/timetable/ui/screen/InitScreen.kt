@@ -61,7 +61,6 @@ import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
 import vip.mystery0.xhu.timetable.utils.dateFormatter
 import vip.mystery0.xhu.timetable.utils.formatWeekString
 import vip.mystery0.xhu.timetable.viewmodel.StarterViewModel
-import vip.mystery0.xhu.timetable.viewmodel.canEnterHome
 import xhutimetable.composeapp.generated.resources.Res
 import xhutimetable.composeapp.generated.resources.ic_app_icon_o
 
@@ -252,7 +251,7 @@ fun InitScreen() {
     }
 
     if (readyState.canNavigate) {
-        if (!canEnterHome(readyState.isLogin)) {
+        if (!readyState.isLogin) {
             navController.replaceTo<RouteInit>(RouteLogin(false))
             return
         }

@@ -1,4 +1,0 @@
-package vip.mystery0.xhu.timetable
-
-actual val androidDebugGuestEnabled: Boolean
-    get() = androidAppConfiguration.isDebug

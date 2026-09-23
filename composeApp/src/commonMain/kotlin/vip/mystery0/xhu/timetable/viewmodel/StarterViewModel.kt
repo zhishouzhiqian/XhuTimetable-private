@@ -21,7 +21,6 @@ import vip.mystery0.xhu.timetable.config.store.getCacheStore
 import vip.mystery0.xhu.timetable.config.store.setCacheStore
 import vip.mystery0.xhu.timetable.config.store.setConfigStore
 import vip.mystery0.xhu.timetable.initFeature
-import vip.mystery0.xhu.timetable.androidDebugGuestEnabled
 import vip.mystery0.xhu.timetable.model.TermStartChangeAlert
 import vip.mystery0.xhu.timetable.model.event.EventType
 import vip.mystery0.xhu.timetable.module.desc
@@ -154,6 +153,3 @@ data class ReadyState(
     val canNavigate: Boolean
         get() = !loading && termStartChangeAlert == null
 }
-
-internal fun canEnterHome(isLoggedIn: Boolean, debugBuild: Boolean = androidDebugGuestEnabled): Boolean =
-    isLoggedIn || debugBuild

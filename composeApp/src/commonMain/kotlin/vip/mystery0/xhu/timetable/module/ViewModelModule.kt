@@ -27,7 +27,6 @@ import vip.mystery0.xhu.timetable.viewmodel.SplashImageViewModel
 import vip.mystery0.xhu.timetable.viewmodel.StarterViewModel
 import vip.mystery0.xhu.timetable.viewmodel.UrgeViewModel
 import vip.mystery0.xhu.timetable.viewmodel.WaterViewModel
-import vip.mystery0.xhu.timetable.viewmodel.LaundryViewModel
 
 expect fun platformViewModelModule(module: Module)
 
@@ -56,7 +55,6 @@ val viewModelModule = module {
     viewModel { UrgeViewModel() }
     viewModel { SchoolTimetableViewModel() }
     viewModel { WaterViewModel(get()) }
-    viewModel { LaundryViewModel(get()) }
 
     platformViewModelModule(this)
 }

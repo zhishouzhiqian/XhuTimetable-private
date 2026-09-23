@@ -42,7 +42,6 @@ import vip.mystery0.xhu.timetable.model.response.CalendarWeekResponse
 import vip.mystery0.xhu.timetable.model.response.ClientVersion
 import vip.mystery0.xhu.timetable.model.response.Poems
 import vip.mystery0.xhu.timetable.model.transfer.AggregationView
-import vip.mystery0.xhu.timetable.androidDebugGuestEnabled
 import vip.mystery0.xhu.timetable.module.desc
 import vip.mystery0.xhu.timetable.repository.AggregationRepo
 import vip.mystery0.xhu.timetable.repository.CourseColorRepo
@@ -154,7 +153,7 @@ class MainViewModel : ComposeViewModel() {
             loadFromConfig()
             val mainUser = UserStore.getMainUser()
             _mainUser.value = mainUser
-            _emptyUser.value = mainUser == null && !androidDebugGuestEnabled
+            _emptyUser.value = mainUser == null
             StartRepo.version.collectLatest {
                 if (it == ClientVersion.EMPTY) {
                     version.value = null
@@ -173,8 +172,7 @@ class MainViewModel : ComposeViewModel() {
 
     private suspend fun loadFromConfig() {
         _multiAccountMode.value = getConfigStore { multiAccountMode }
-        val guestMode = androidDebugGuestEnabled && UserStore.getMainUser() == null
-        _enableCalendarView.value = !guestMode && getConfigStore { enableCalendarView && !multiAccountMode }
+        _enableCalendarView.value = getConfigStore { enableCalendarView && !multiAccountMode }
         _showStatus.value = getConfigStore { showStatus }
         _showTomorrowCourse.value =
             getConfigStore { showTomorrowCourseTime }?.let { LocalTime.now() > it } ?: false
@@ -212,7 +210,7 @@ class MainViewModel : ComposeViewModel() {
         viewModelScope.safeLaunch {
             val mainUser = UserStore.getMainUser()
             _mainUser.value = mainUser
-            _emptyUser.value = mainUser == null && !androidDebugGuestEnabled
+            _emptyUser.value = mainUser == null
         }
     }
 
@@ -240,14 +238,11 @@ class MainViewModel : ComposeViewModel() {
     ): AggregationView {
         val showCustomCourse = getConfigStore { showCustomCourseOnWeek }
         val showCustomThing = getConfigStore { showCustomThing }
-        val guestUsers: List<User>? =
-            if (androidDebugGuestEnabled && UserStore.getMainUser() == null) emptyList() else null
         val view = AggregationRepo.fetchAggregationMainPage(
             forceLoadFromCloud,
             forceLoadFromLocal,
             showCustomCourse,
             showCustomThing,
-            users = guestUsers,
         )
         setCacheStore { lastSyncCourse = LocalDate.now() }
         if (view.loadWarning.isNotBlank()) {
@@ -273,12 +268,10 @@ class MainViewModel : ComposeViewModel() {
                     val (currentWeek, loadFromCloud) = loadCourseConfig(forceUpdate = false)
                     //获取缓存的课程数据
                     val data = getMainPageData(forceLoadFromCloud = false, forceLoadFromLocal = true)
-                    val guestMode = androidDebugGuestEnabled && UserStore.getMainUser() == null
-                    val calendarData = if (guestMode) emptyList() else
-                        AggregationRepo.fetchAggregationCalendarPage(
-                            forceLoadFromCloud = false,
-                            forceLoadFromLocal = true
-                        )
+                    val calendarData = AggregationRepo.fetchAggregationCalendarPage(
+                        forceLoadFromCloud = false,
+                        forceLoadFromLocal = true
+                    )
                     //获取自定义颜色列表
                     val colorMap = CourseColorRepo.getRawCourseColorList()
                     withContext(Dispatchers.Default) {
@@ -304,7 +297,7 @@ class MainViewModel : ComposeViewModel() {
                         loadPracticalCourse(data.practicalCourseList)
                     }
 
-                    if (loadFromCloud && !guestMode) {
+                    if (loadFromCloud) {
                         //需要从云端加载数据
                         val cloudData =
                             getMainPageData(forceLoadFromCloud = true, forceLoadFromLocal = false)
@@ -347,10 +340,6 @@ class MainViewModel : ComposeViewModel() {
      * 手动刷新加载数据的方法
      */
     fun refreshCloudDataToState() {
-        if (androidDebugGuestEnabled && _mainUser.value == null) {
-            toastMessage("Debug 游客模式下不执行课表云端刷新")
-            return
-        }
         viewModelScope.safeLaunch(onException = networkErrorHandler { throwable ->
             logger.w("load course list failed", throwable)
             _loading.value = false
