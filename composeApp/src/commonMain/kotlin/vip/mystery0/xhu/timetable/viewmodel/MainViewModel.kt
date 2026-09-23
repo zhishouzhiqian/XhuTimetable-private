@@ -240,7 +240,8 @@ class MainViewModel : ComposeViewModel() {
     ): AggregationView {
         val showCustomCourse = getConfigStore { showCustomCourseOnWeek }
         val showCustomThing = getConfigStore { showCustomThing }
-        val guestUsers = if (androidDebugGuestEnabled && UserStore.getMainUser() == null) emptyList() else null
+        val guestUsers: List<User>? =
+            if (androidDebugGuestEnabled && UserStore.getMainUser() == null) emptyList() else null
         val view = AggregationRepo.fetchAggregationMainPage(
             forceLoadFromCloud,
             forceLoadFromLocal,
