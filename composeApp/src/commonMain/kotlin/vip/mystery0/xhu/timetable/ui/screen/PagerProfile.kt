@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.twotone.ArrowForwardIos
+import androidx.compose.material.icons.twotone.LocalLaundryService
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -56,6 +57,8 @@ import vip.mystery0.xhu.timetable.ui.component.TabContent
 import vip.mystery0.xhu.timetable.ui.component.TabTitle
 import vip.mystery0.xhu.timetable.ui.navigation.LocalNavController
 import vip.mystery0.xhu.timetable.ui.navigation.RouteWater
+import vip.mystery0.xhu.timetable.ui.navigation.RouteLaundry
+import vip.mystery0.xhu.timetable.ui.navigation.RouteLogin
 import vip.mystery0.xhu.timetable.ui.theme.ProfileImages
 import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
 import vip.mystery0.xhu.timetable.ui.theme.XhuImages
@@ -196,33 +199,56 @@ val profileCourseContent: TabContent = @Composable {
                 .background(MaterialTheme.colorScheme.outline)
         )
 
-        val menuList by profileViewModel.menu.collectAsState()
-        val hasUnReadNotice by profileViewModel.hasUnReadNotice.collectAsState()
-        val hasUnReadFeedback by profileViewModel.hasUnReadFeedback.collectAsState()
-        menuList.forEach {
-            it.forEach { menu ->
-                val item = MenuItem.parseKey(menu.key.uppercase())
-                val showBadge = when (item) {
-                    MenuItem.NOTICE -> hasUnReadNotice
-                    MenuItem.FEEDBACK -> hasUnReadFeedback
-                    else -> false
+        if (isLaundryServiceSupported) {
+            BuildProfileItem(
+                imageVector = Icons.TwoTone.LocalLaundryService,
+                title = "洗衣服务",
+                tint = MaterialTheme.colorScheme.primary,
+                click = { navController.navigate(RouteLaundry) },
+            )
+            HorizontalDivider(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(MaterialTheme.colorScheme.outline)
+            )
+        }
+
+        if (mainUser == null) {
+            BuildProfileItem(
+                painter = XhuIcons.Profile.accountSettings,
+                title = "登录西瓜课表",
+                click = { navController.navigate(RouteLogin(false)) },
+            )
+        } else {
+            val menuList by profileViewModel.menu.collectAsState()
+            val hasUnReadNotice by profileViewModel.hasUnReadNotice.collectAsState()
+            val hasUnReadFeedback by profileViewModel.hasUnReadFeedback.collectAsState()
+            menuList.forEach {
+                it.forEach { menu ->
+                    val item = MenuItem.parseKey(menu.key.uppercase())
+                    val showBadge = when (item) {
+                        MenuItem.NOTICE -> hasUnReadNotice
+                        MenuItem.FEEDBACK -> hasUnReadFeedback
+                        else -> false
+                    }
+                    BuildProfileItem(
+                        painter = item.icon(),
+                        title = menu.title,
+                        showBadge = showBadge,
+                        click = {
+                            coroutineScope.safeLaunch(Dispatchers.Main) {
+                                trackEvent("点击菜单 ${menu.key}")
+                                item.action(MenuNavigator(navController, uriHandler, context), menu)
+                            }
+                        })
+                    HorizontalDivider(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(MaterialTheme.colorScheme.outline)
+                    )
                 }
-                BuildProfileItem(
-                    painter = item.icon(),
-                    title = menu.title,
-                    showBadge = showBadge,
-                    click = {
-                        coroutineScope.safeLaunch(Dispatchers.Main) {
-                            trackEvent("点击菜单 ${menu.key}")
-                            item.action(MenuNavigator(navController, uriHandler, context), menu)
-                        }
-                    })
-                HorizontalDivider(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(MaterialTheme.colorScheme.outline)
-                )
             }
         }
     }
@@ -270,6 +296,38 @@ private fun BuildProfileItem(
             modifier = Modifier
                 .padding(end = 12.dp, start = if (showBadge) 10.dp else 12.dp)
                 .size(12.dp),
+            tint = MaterialTheme.colorScheme.onBackground,
+        )
+    }
+}
+
+@Composable
+private fun BuildProfileItem(
+    imageVector: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    tint: Color = Color.Unspecified,
+    click: () -> Unit = {},
+) {
+    Row(
+        modifier = Modifier.height(48.dp).clickable(onClick = click),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = imageVector,
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
+        Text(
+            text = title,
+            color = MaterialTheme.colorScheme.onBackground,
+            fontSize = 14.sp,
+            modifier = Modifier.weight(1F).padding(vertical = 12.dp),
+        )
+        Icon(
+            imageVector = Icons.AutoMirrored.TwoTone.ArrowForwardIos,
+            contentDescription = null,
+            modifier = Modifier.padding(horizontal = 12.dp).size(12.dp),
             tint = MaterialTheme.colorScheme.onBackground,
         )
     }

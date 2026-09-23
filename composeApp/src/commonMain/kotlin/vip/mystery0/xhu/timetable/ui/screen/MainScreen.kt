@@ -3,6 +3,7 @@ package vip.mystery0.xhu.timetable.ui.screen
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -13,6 +14,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.FlexibleBottomAppBar
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -24,10 +26,14 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.alpha
@@ -36,10 +42,18 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.twotone.LocalLaundryService
+import androidx.compose.material.icons.twotone.QrCodeScanner
 import androidx.compose.ui.util.lerp
 import co.touchlab.kermit.Logger
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.DrawableResource
 import org.koin.compose.viewmodel.koinViewModel
 import vip.mystery0.xhu.timetable.base.HandleErrorMessage
@@ -58,6 +72,7 @@ import vip.mystery0.xhu.timetable.ui.navigation.LocalNavController
 import vip.mystery0.xhu.timetable.ui.navigation.RouteLogin
 import vip.mystery0.xhu.timetable.ui.navigation.RouteMain
 import vip.mystery0.xhu.timetable.ui.navigation.RouteWater
+import vip.mystery0.xhu.timetable.ui.navigation.RouteLaundry
 import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
 import vip.mystery0.xhu.timetable.model.water.WaterUiState
 import vip.mystery0.xhu.timetable.model.water.WaterStartDecision
@@ -70,11 +85,16 @@ import vip.mystery0.xhu.timetable.ui.theme.stateOf
 import vip.mystery0.xhu.timetable.viewmodel.MainViewModel
 import vip.mystery0.xhu.timetable.viewmodel.PagerProfileViewModel
 import vip.mystery0.xhu.timetable.viewmodel.WaterViewModel
+import vip.mystery0.xhu.timetable.viewmodel.LaundryViewModel
+import vip.mystery0.xhu.timetable.model.laundry.LaundryPhase
+import vip.mystery0.xhu.timetable.model.laundry.selectHomepageLaundryOrder
+import kotlin.time.Clock
 
 @Composable
 fun MainScreen() {
     val viewModel = koinViewModel<MainViewModel>()
     val waterViewModel = koinViewModel<WaterViewModel>()
+    val laundryViewModel = koinViewModel<LaundryViewModel>()
 
     val navController = LocalNavController.current
 
@@ -90,6 +110,22 @@ fun MainScreen() {
     LaunchedEffect(Unit) {
         viewModel.loadBackground(isDarkMode)
         waterViewModel.init()
+        if (isLaundryServiceSupported) laundryViewModel.init()
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, isLaundryServiceSupported) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME && isLaundryServiceSupported &&
+                laundryViewModel.uiState.value.phase !in setOf(
+                    LaundryPhase.CheckingSession,
+                    LaundryPhase.LoggingIn,
+                )
+            ) {
+                laundryViewModel.controller.checkSession()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     HandleEventBus()
     ShowUpdateDialog()
@@ -109,8 +145,15 @@ fun MainScreen() {
                 },
                 navigationIcon = {
                     if (tab == Tab.TODAY) {
-                        WaterQuickControl(waterViewModel) {
-                            navController.navigate(RouteWater)
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            WaterQuickControl(waterViewModel) {
+                                navController.navigate(RouteWater)
+                            }
+                            if (isLaundryServiceSupported) {
+                                LaundryQuickControl(laundryViewModel) {
+                                    navController.navigate(RouteLaundry)
+                                }
+                            }
                         }
                     }
                 },
@@ -220,6 +263,14 @@ fun MainScreen() {
             )
         }
     }
+    if (isLaundryServiceSupported) {
+        LaundryWebSessionView(
+            modifier = Modifier.size(1.dp).alpha(0F),
+            controller = laundryViewModel.controller,
+            loginMode = false,
+            foreground = false,
+        )
+    }
     val emptyUser by viewModel.emptyUser.collectAsState()
     if (emptyUser) {
         navController.replaceTo<RouteMain>(RouteLogin(false))
@@ -253,6 +304,47 @@ fun MainScreen() {
                 TextButton(onClick = waterViewModel::dismissStartConfirmation) { Text("取消") }
             },
         )
+    }
+}
+
+@Composable
+private fun LaundryQuickControl(viewModel: LaundryViewModel, openDetails: () -> Unit) {
+    val state by viewModel.uiState.collectAsState()
+    val active = selectHomepageLaundryOrder(state.orders)
+    var now by remember { mutableLongStateOf(Clock.System.now().toEpochMilliseconds()) }
+    LaunchedEffect(active?.expectedEndAtEpochMillis) {
+        while (active?.expectedEndAtEpochMillis != null) {
+            now = Clock.System.now().toEpochMilliseconds()
+            delay(1_000)
+        }
+    }
+    val remainingMinutes = active?.expectedEndAtEpochMillis?.minus(now)
+        ?.coerceAtLeast(0)?.div(60_000)
+    val busy = state.phase == LaundryPhase.CheckingSession ||
+        state.phase == LaundryPhase.CheckingOrders
+    IconButton(
+        onClick = {
+            if (state.phase == LaundryPhase.Idle) viewModel.beginScan()
+            openDetails()
+        },
+    ) {
+        if (busy) {
+            CircularProgressIndicator(modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+        } else {
+            Column(horizontalAlignment = androidx.compose.ui.Alignment.CenterHorizontally) {
+                Icon(
+                    imageVector = if (active == null) Icons.TwoTone.QrCodeScanner
+                    else Icons.TwoTone.LocalLaundryService,
+                    contentDescription = if (active == null) "扫描洗衣机" else "查看洗衣剩余时间",
+                    tint = if (active == null) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(if (active == null) 24.dp else 20.dp),
+                )
+                if (remainingMinutes != null) {
+                    Text("${remainingMinutes}分", fontSize = 10.sp, lineHeight = 10.sp)
+                }
+            }
+        }
     }
 }
 
