@@ -131,7 +131,7 @@ internal actual fun LaundryWebSessionView(
                         if (runtimeReady && currentLoginMode && loginPageVisited) {
                             loginPageVisited = false
                             CookieManager.getInstance().flush()
-                            controller.checkSession()
+                            controller.checkSession(afterLogin = true)
                         }
                     }
 
@@ -227,10 +227,18 @@ private class LaundryWebMessageListener(
 private fun buildLaundryScript(command: LaundryWebCommand): String {
     val action = when (command) {
         is LaundryWebCommand.CheckSession -> """
-            request('mtop.tmall.campus.member.user.login', {}).then(function(result) {
-              var loggedIn = Boolean(deepValue(result, ['doHaveLogin']));
-              send('session', {loggedIn: loggedIn});
-            }).catch(function(error) {
+            (async function() {
+              var result;
+              for (var attempt = 0; attempt < ${if (command.afterLogin) 3 else 1}; attempt++) {
+                if (attempt > 0) await new Promise(function(resolve) { setTimeout(resolve, 1000); });
+                result = await request('mtop.tmall.campus.member.user.login', {});
+                if (deepValue(result, ['doHaveLogin']) === true) {
+                  send('session', {loggedIn: true});
+                  return;
+                }
+              }
+              send('session', {loggedIn: false});
+            })().catch(function(error) {
               var reason = error && error.ret ? String(error.ret) : '';
               if (reason.indexOf('SESSION_EXPIRED') >= 0 || reason.indexOf('NEED_LOGIN') >= 0) {
                 send('session', {loggedIn: false});

@@ -52,6 +52,18 @@ class LaundryServiceControllerTest {
     }
 
     @Test
+    fun loginReturnIsNotMistakenForCampusAuthentication() {
+        val controller = LaundryServiceController()
+        controller.checkSession(afterLogin = true)
+        val check = controller.webCommand.value as LaundryWebCommand.CheckSession
+        assertTrue(check.afterLogin)
+        controller.onSessionResult(check.id, false)
+        assertEquals(LaundryPhase.NeedsLogin, controller.uiState.value.phase)
+        assertTrue(controller.uiState.value.message.contains("尚未确认登录"))
+        assertTrue(controller.uiState.value.orders.isEmpty())
+    }
+
+    @Test
     fun foregroundWebViewOwnsTheQuery() {
         val gateway = LaundryWebSessionGateway()
         val background = gateway.register(false)

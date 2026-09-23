@@ -33,12 +33,12 @@ class LaundryServiceController {
         checkSession()
     }
 
-    fun checkSession() {
+    fun checkSession(afterLogin: Boolean = false) {
         _uiState.value = _uiState.value.copy(
             phase = LaundryPhase.CheckingSession,
             message = "",
         )
-        _webCommand.value = LaundryWebCommand.CheckSession(++commandId)
+        _webCommand.value = LaundryWebCommand.CheckSession(++commandId, afterLogin)
     }
 
     fun showLogin() {
@@ -86,6 +86,8 @@ class LaundryServiceController {
     }
 
     fun onSessionResult(id: Long, loggedIn: Boolean) {
+        val afterLogin = (_webCommand.value as? LaundryWebCommand.CheckSession)
+            ?.takeIf { it.id == id }?.afterLogin ?: false
         if (!consume(id)) return
         if (loggedIn) {
             refreshOrders()
@@ -95,7 +97,11 @@ class LaundryServiceController {
                 orders = emptyList(),
                 refreshing = false,
                 stale = false,
-                message = "请先登录天猫校园",
+                message = if (afterLogin) {
+                    "登录页面已返回，但天猫校园尚未确认登录。请重新登录；若仍出现此提示，说明官方账号会话未同步到洗衣页面。"
+                } else {
+                    "请先登录天猫校园"
+                },
             )
         }
     }

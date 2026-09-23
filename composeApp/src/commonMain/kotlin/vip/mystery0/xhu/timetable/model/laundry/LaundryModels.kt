@@ -36,7 +36,10 @@ data class LaundryUiState(
 sealed interface LaundryWebCommand {
     val id: Long
 
-    data class CheckSession(override val id: Long) : LaundryWebCommand
+    data class CheckSession(
+        override val id: Long,
+        val afterLogin: Boolean = false,
+    ) : LaundryWebCommand
     data class QueryOrders(override val id: Long) : LaundryWebCommand
 }
 

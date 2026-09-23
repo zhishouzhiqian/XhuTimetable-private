@@ -143,7 +143,11 @@ private fun LaundryContent(
         LaundryPhase.Running -> RunningLaundryContent(state, onScan, onExpectedEnd)
         LaundryPhase.NeedsLogin,
         LaundryPhase.Expired,
-        LaundryPhase.Error -> ErrorLaundryContent(state.message, onRetry)
+        LaundryPhase.Error -> ErrorLaundryContent(
+            state.message,
+            if (state.phase == LaundryPhase.NeedsLogin || state.phase == LaundryPhase.Expired) "重新登录" else "重试",
+            onRetry,
+        )
         LaundryPhase.LoggingIn -> Unit
     }
 }
@@ -270,13 +274,13 @@ private fun formatRemaining(millis: Long): String {
 private fun Number.twoDigits(): String = toString().padStart(2, '0')
 
 @Composable
-private fun ErrorLaundryContent(message: String, onRetry: () -> Unit) {
+private fun ErrorLaundryContent(message: String, buttonLabel: String, onRetry: () -> Unit) {
     Column(
         modifier = Modifier.fillMaxSize().padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
     ) {
         Text(message.ifBlank { "暂时无法使用洗衣服务" })
-        Button(onClick = onRetry) { Text("重试") }
+        Button(onClick = onRetry) { Text(buttonLabel) }
     }
 }
