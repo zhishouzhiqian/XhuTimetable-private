@@ -1,0 +1,96 @@
+# 个人测试构建；私有 Maven 凭据在 Codemagic 应用级变量组中配置。
+workflows:
+  ios-personal-unsigned:
+    name: 西瓜课表 iOS 个人测试（未签名）
+    instance_type: mac_mini_m2
+    max_build_duration: 60
+    environment:
+      xcode: "26.2"
+      java: "21"
+      groups:
+        - private_maven
+    cache:
+      cache_paths:
+        - $HOME/.gradle/caches
+        - $HOME/.gradle/wrapper
+        - $HOME/.konan/dependencies
+    # 首次配置采用手动构建，避免每次推送消耗 macOS 构建额度。
+    scripts:
+      - name: 检查环境及私有 Maven 凭据
+        script: |
+          set -euo pipefail
+          if [[ -z "${GITHUB_USERNAME:-}" || -z "${GITHUB_PASSWORD:-}" ]]; then
+            echo "请在 private_maven 变量组中配置 GITHUB_USERNAME 和 GITHUB_PASSWORD，并勾选 Secret。" >&2
+            exit 1
+          fi
+          java -version
+          xcodebuild -version
+          # 完整历史用于项目既有的 git 提交数版本号。
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            git fetch --unshallow
+          fi
+          chmod a+x gradlew
+          mkdir -p "$HOME/.gradle" build/ios-personal/logs
+          printf '%s\n' 'org.gradle.configureondemand=true' >> "$HOME/.gradle/gradle.properties"
+          cp iosApp/Configuration/Config.xcconfig.template iosApp/Configuration/Config.xcconfig
+      - name: 更新许可证及 Apple 版本号
+        script: |
+          set -euo pipefail
+          ./gradlew --configure-on-demand composeApp:exportLibraryDefinitions composeApp:updateAppleBuildVersion --stacktrace 2>&1 | tee build/ios-personal/logs/prepare.log
+      - name: 验证共享 iOS 状态逻辑
+        script: |
+          set -euo pipefail
+          ./gradlew --configure-on-demand composeApp:iosSimulatorArm64Test --stacktrace 2>&1 | tee build/ios-personal/logs/tests.log
+      - name: 编译未签名 iPhone 应用
+        script: |
+          set -euo pipefail
+          xcodebuild \
+            -project iosApp/iosApp.xcodeproj \
+            -scheme iosApp \
+            -configuration Debug \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/ios-personal/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            CODE_SIGN_ENTITLEMENTS= \
+            DEVELOPMENT_TEAM= \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) PERSONAL_TEST_BUILD' \
+            build 2>&1 | tee build/ios-personal/logs/xcodebuild.log
+      - name: 打包个人测试 IPA
+        script: |
+          set -euo pipefail
+          # 在独立暂存目录去除扩展与签名，保留原始编译产物供诊断。
+          python3 - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          output = Path('build/ios-personal')
+          source = output / 'DerivedData/Build/Products/Debug-iphoneos/XhuTimetable.app'
+          if not source.is_dir():
+              raise SystemExit('没有找到 iOS .app 构建产物。')
+          app = output / 'Payload/XhuTimetable.app'
+          shutil.copytree(source, app, dirs_exist_ok=True, symlinks=True)
+          for name in ('PlugIns', '_CodeSignature'):
+              target = app / name
+              if target.exists():
+                  shutil.rmtree(target)
+          (app / 'embedded.mobileprovision').unlink(missing_ok=True)
+          PY
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/ios-personal/Payload \
+            build/ios-personal/XhuTimetable-personal-unsigned.ipa
+          python3 - <<'PY'
+          import zipfile
+          with zipfile.ZipFile('build/ios-personal/XhuTimetable-personal-unsigned.ipa') as ipa:
+              if 'Payload/XhuTimetable.app/Info.plist' not in ipa.namelist():
+                  raise SystemExit('IPA 目录结构不正确。')
+              if ipa.testzip() is not None:
+                  raise SystemExit('IPA 文件校验失败。')
+          PY
+    artifacts:
+      - build/ios-personal/*.ipa
+      - build/ios-personal/logs/*.log
+      - composeApp/build/reports/tests/iosSimulatorArm64Test/**
+      - composeApp/build/test-results/iosSimulatorArm64Test/*.xml

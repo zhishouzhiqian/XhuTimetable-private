@@ -511,3 +511,7 @@ iOS 新增页面宿主及 IosLaundryRuntime 注册边界，使用现有 Material
 用户随后明确授权提交、推送并运行个人测试 Actions。原 personal remote 地址不可访问，确认 personal-private 中 feature/water-service 仍指向本地基线 3dcb5f5 后，提交 6957b3b 并推送到该已有私有仓库；没有推送上游，没有加入 IPA、公开 SDK 下载包、凭据或构建产物。
 
 [iOS 个人测试运行 36685124236](https://github.com/zhishouzhiqian/XhuTimetable-private/actions/runs/36685124236) 已触发，但任务在运行器启动前失败，steps 为空，没有构建日志或 IPA。GitHub 的失败注释指出账户付款或支出限额限制；另有 macOS arm64 排队容量通知。Android 个人测试也未启动运行器。此结果不能算作源码编译失败，也不能算作 iOS 编译成功。未修改账户付费设置、未反复重跑；需用户在 Billing & plans 恢复 Actions 使用条件后继续验证。iOS 校园 SDK 签名及真实客户端接入仍未完成。
+
+### Codemagic 构建配置
+
+用户选择改用已经登记的 Codemagic。新增根目录 codemagic.yaml，使用 mac_mini_m2、JDK 21 和 Xcode 26.2，沿用共享 iOS 测试及无签名个人测试 IPA；缓存依赖并保存测试与 Xcode 日志，仅手动触发。官方 schema、YAML 与脚本语法检查通过。浏览器控制连接失败，尚未确认 Codemagic 仓库导入、private_maven 加密变量配置或构建结果；账户侧步骤见 [Codemagic 个人测试构建说明](codemagic-ios-personal.md)。GitHub secret 不能读回迁移，须用户提供给 Codemagic 原始值。iOS 原生编译及真实校园客户端仍待验证。
