@@ -14,6 +14,8 @@
 
 GitHub Actions 已保存的 secret 不能读取后自动迁移；需要使用原始值。私有 Maven 包读取权限沿用项目既有要求，仓库连接的权限不能替代 Maven 凭据。
 
+也兼容原名称 `NEXUS_USER` / `NEXUS_PASSWORD`：准备步骤映射为 Gradle 使用的 `GITHUB_USERNAME` / `GITHUB_PASSWORD`，通过 Codemagic 的 `CM_ENV` 供后续步骤使用，不输出值。用户已在应用变量组保存 `GITHUB_USERNAME` 与 `NEXUS_PASSWORD`，无需更改密钥名称。
+
 3. 点击 Start new build，选择 `feature/water-service` 分支、`ios-personal-unsigned` 工作流，再启动构建。
 4. 构建完成后从 Artifacts 下载 `XhuTimetable-personal-unsigned.ipa`。失败时查看准备、测试和 Xcode 日志，以及共享测试报告。
 

@@ -19,10 +19,14 @@ workflows:
       - name: 检查环境及私有 Maven 凭据
         script: |
           set -euo pipefail
+          # 兼容从原 Actions 迁入时保留的变量名；不输出凭据。
+          export GITHUB_USERNAME="${GITHUB_USERNAME:-${NEXUS_USER:-}}"
+          export GITHUB_PASSWORD="${GITHUB_PASSWORD:-${NEXUS_PASSWORD:-}}"
           if [[ -z "${GITHUB_USERNAME:-}" || -z "${GITHUB_PASSWORD:-}" ]]; then
             echo "请在 private_maven 变量组中配置 GITHUB_USERNAME 和 GITHUB_PASSWORD，并勾选 Secret。" >&2
             exit 1
           fi
+          printf '%s\n' "GITHUB_USERNAME=$GITHUB_USERNAME" "GITHUB_PASSWORD=$GITHUB_PASSWORD" >> "$CM_ENV"
           java -version
           xcodebuild -version
           # 完整历史用于项目既有的 git 提交数版本号。
