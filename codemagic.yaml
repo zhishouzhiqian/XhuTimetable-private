@@ -1,5 +1,26 @@
 # 个人测试构建；私有 Maven 凭据在 Codemagic 应用级变量组中配置。
 workflows:
+  ios-component-check:
+    name: iOS 洗衣组件轻量检查（未签名）
+    instance_type: mac_mini_m2
+    max_build_duration: 15
+    environment:
+      xcode: "26.2"
+    # 无自动触发；用于组件排查，不替代完整课表应用的构建和验收。
+    scripts:
+      - name: 校验资源准备工具并下载候选 SDK
+        script: |
+          set -euo pipefail
+          python3 -m unittest discover -s tools -p 'test_prepare_campus_ios_probe.py'
+          python3 tools/prepare_campus_ios_probe.py --frameworks-output build/campus-ios-probe/frameworks
+      - name: 编译并打包轻量组件检查应用
+        script: |
+          set -euo pipefail
+          mkdir -p build/ios-component-probe/logs
+          bash tools/build_campus_ios_probe.sh 2>&1 | tee build/ios-component-probe/logs/build.log
+    artifacts:
+      - build/ios-component-probe/*.ipa
+      - build/ios-component-probe/logs/*.log
   ios-personal-unsigned:
     name: 西瓜课表 iOS 个人测试（未签名）
     instance_type: mac_mini_m2

@@ -32,3 +32,12 @@ GitHub Actions 已保存的 secret 不能读取后自动迁移；需要使用原
 修复提交 `08f3ecf` 的第二次构建 [6abcd8ac083ff0a9a53aa753](https://codemagic.io/app/6abcc2cd6c98472e80a8cc91/build/6abcd8ac083ff0a9a53aa753) 已完成，共享 `iosSimulatorArm64Test` 编译与执行成功（8 分 42 秒），设备 Xcode 构建显示 `BUILD SUCCEEDED`，IPA 打包和 ZIP 内容/完整性校验成功。Artifacts 已提供 `XhuTimetable-personal-unsigned.ipa`（页面显示 32.24 MB）及日志/测试报告压缩包。Swift 宿主及扫码控制器可编译；这不替代真机运行、相机、授权和支付验收。真实校园客户端仍未接通，不能把此测试包当作已可下单的 iOS 版本。Android 继续本地构建，Codemagic 仅负责 iOS。
 
 配置参考：[Codemagic YAML](https://docs.codemagic.io/yaml-basic-configuration/yaml-getting-started/)、[加密环境变量与变量组](https://docs.codemagic.io/yaml-basic-configuration/configuring-environment-variables/)、[Xcode 26.2 环境](https://docs.codemagic.io/specs-macos/xcode-26-2/)。
+# 洗衣组件排查的轻量工作流
+
+洗衣安全组件排查优先手动选择 `ios-component-check`（“iOS 洗衣组件轻量检查（未签名）”）。它只构建独立 UIKit 检查应用，不运行 Gradle / Kotlin Native，避免每次排查重编整个课表。
+
+安装 `CampusComponentCheck-unsigned.ipa` 后打开“洗衣组件检查”，导入已有 `campus-ios-check-resources.json`，先保持 AppKey 留空并运行，使用“复制检查结果”反馈。资源导入后可跨重启复用；SDK 每个进程只能检查一次，需要再次检查时彻底关闭应用再打开。
+
+只有已知 iOS 抓包中的 AppKey 时才填写可选输入。检查报告不含 AppKey、签名、令牌或资源内容。独立应用 Bundle ID 与课表不同，检查通过后仍需在完整应用中验证。
+
+完整课表安装包继续使用 `ios-personal-unsigned`。两个工作流都只手动触发；不要为了查看状态重复点击 Start new build。

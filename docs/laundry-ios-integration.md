@@ -40,6 +40,24 @@ Codemagic 个人工作流使用固定 SHA-256 校验的公开包，只链接 Sec
 
 Android `CampusClient.request` 每次设置当前 `t`、业务数据及会话信息，并调用 `getUnifiedSign` 生成本次签名。现有安卓功能成功不是“旧抓包签名可以持续重放”的证据；iOS 抓包和接口清单可辅助核对协议，但不能替代新请求的签名与真实响应验证。
 
+## 降低检查构建开销
+
+用户真机最新反馈：SDK 初始化成功，读取应用配置为空。旧检查显示的 `-1` 是工具通用标记，不是 SDK 返回码；公开 `getAppKey:authCode:` 接口返回字符串，没有 NSError 参数，不能从空值推断签名不兼容。
+
+检查代码现增加以下信息，并复用于完整应用和轻量宿主：
+
+- 资源 Bundle 查找、文件可读性及与导入时 SHA-256 的一致性，导入后重启可复用资源。
+- MainPlugin、MiddleTierPlugin、SecurityBodyPlugin 的链接状态，SDK 版本和静态配置组件是否可获取。
+- AppKey 为空仍检查统一签名初始化，保留真实 SDK 错误码。允许可选输入已知抓包 AppKey，但它不代表对应密钥可用；不展示或保存输入值。
+- 条件满足时用两个不同输入检查本地签名是否变化，不发送 MTOP 请求。
+- 按阶段实时更新结果，复制脱敏报告，关闭重开页面仍保留状态。超时保留已完成步骤。
+
+新增手动工作流 `ios-component-check`（iOS 洗衣组件轻量检查）：只编译同一套 UIKit / Objective-C 检查代码和候选 SDK，跳过 Gradle、Kotlin/Native、数据库和课表扩展。先执行 4 项使用桩组件的 macOS 原生流程测试，覆盖 AppKey 为空继续检查、提示值驱动新签名、资源损坏阻断和 SDK 错误码保留，再编译 iPhone 检查宿主。桩测试不会执行厂商二进制或访问校园服务器。
+
+产物为 `CampusComponentCheck-unsigned.ipa`，应用名“洗衣组件检查”，使用独立 Bundle ID，可与课表共存。它的成功不能替代西瓜课表实际 Bundle ID 下的验证；组件排查完成后再集中运行完整 `ios-personal-unsigned` 工作流。两个工作流均无自动触发。
+
+本轮本地验证：资源准备工具 5 项测试、Bash 语法和 YAML 配置检查通过。新增 Swift / Objective-C 的编译、4 项原生桩测试和真机表现需云端及设备验证，未把源码检查记为执行通过。
+
 本地准备工具 5 项测试通过；JDK 21 下 `composeApp:testAndroidHostTest` 和 `androidApp:assembleDebug` 通过。安全资源 JSON 为本地生成文件，不是 CI 产物。
 
 ## 已完成的基础验证
