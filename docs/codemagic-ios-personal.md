@@ -27,4 +27,6 @@ GitHub Actions 已保存的 secret 不能读取后自动迁移；需要使用原
 
 本地 YAML 解析、Codemagic 官方 JSON schema 校验、5 个 Bash 步骤及内嵌 Python 语法检查均通过。未改应用源码，因此本轮没有重复运行 Android 构建。Codemagic 控制台连接在本次会话中失败（浏览器连接工具返回 `nodeRepl.fetch request failed`），因此尚未确认应用导入、环境变量或云端构建成功。
 
+后续已成功连接应用并确认两项 Secret 位于 `private_maven`；直接点击分支文字可打开分支列表，选择 `feature/water-service` 后已识别 YAML。首次构建 [6abcd3a5083ff0a9a53aa5dd](https://codemagic.io/app/6abcc2cd6c98472e80a8cc91/build/6abcd3a5083ff0a9a53aa5dd) 已进入运行器，环境检查、依赖准备及 Apple 版本更新成功。共享 iOS 测试在编译时发现 `iosMain` 与 `iosSimulatorArm64Main` 重复声明 `isDebug`，尚未运行测试或生成 IPA。已将设备声明移至 `iosArm64Main`，保留设备 false、模拟器 true，等待云端重新验证。
+
 配置参考：[Codemagic YAML](https://docs.codemagic.io/yaml-basic-configuration/yaml-getting-started/)、[加密环境变量与变量组](https://docs.codemagic.io/yaml-basic-configuration/configuring-environment-variables/)、[Xcode 26.2 环境](https://docs.codemagic.io/specs-macos/xcode-26-2/)。
