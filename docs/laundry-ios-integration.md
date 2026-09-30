@@ -36,6 +36,8 @@ Codemagic 个人工作流使用固定 SHA-256 校验的公开包，只链接 Sec
 
 组件检查包的 Xcode 编译与真机 SDK 结果：待本轮验证。
 
+本地准备工具 5 项测试通过；JDK 21 下 `composeApp:testAndroidHostTest` 和 `androidApp:assembleDebug` 通过。安全资源 JSON 为本地生成文件，不是 CI 产物。
+
 ## 已完成的基础验证
 
 - `composeApp:testAndroidHostTest`：71 项通过，包含新增授权回调、跳转来源、微信路由、重复/取消回调测试。

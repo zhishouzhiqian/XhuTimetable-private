@@ -50,6 +50,12 @@ workflows:
           # 官方公开包使用固定 SHA-256 校验；不上传 IPA 安全资源。
           python3 -m unittest discover -s tools -p 'test_prepare_campus_ios_probe.py'
           python3 tools/prepare_campus_ios_probe.py --frameworks-output build/campus-ios-probe/frameworks
+          # 在耗时的 Kotlin/Native 构建前检查厂商头文件与 ARC 兼容性。
+          xcrun --sdk iphoneos clang -fsyntax-only -fobjc-arc -fblocks \
+            -target arm64-apple-ios16.0 \
+            -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
+            -F build/campus-ios-probe/frameworks -DCAMPUS_COMPONENT_PROBE=1 \
+            iosApp/iosApp/CampusComponentProbe.m
       - name: 更新许可证及 Apple 版本号
         script: |
           set -euo pipefail
