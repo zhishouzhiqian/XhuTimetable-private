@@ -505,3 +505,9 @@ iOS 新增页面宿主及 IosLaundryRuntime 注册边界，使用现有 Material
 现有 build_ios_personal.yml 增加 composeApp:iosSimulatorArm64Test 和测试报告 artifact 上传，继续沿用无签名个人测试 IPA 流程，没有改为发布或 App Store 上传。只有源码提交到 GitHub 后才可运行该构建；不能把本地 YAML 语法检查称为 Actions 成功。上传成功的 unsigned IPA 还需要用户已有的签名安装方式。
 
 本地验证：composeApp:testAndroidHostTest 共 66 项、androidApp:testStandardDebugUnitTest 共 24 项及 androidApp:assembleDebug 成功，原 Android 业务回归未失败；新增共享测试涵盖一次性扫码与取消、报价等待、创建不明确、微信返回、终态再次核验、多订单及采样时间，二维码测试涵盖来源、嵌套与长度校验。Python 工具测试共 34 项通过，Info.plist 和 Actions YAML 语法解析通过。iOS 原生编译、SDK 兼容、真实登录、扫码与支付仍未验证。
+
+### 用户授权后的首次 Actions 验证
+
+用户随后明确授权提交、推送并运行个人测试 Actions。原 personal remote 地址不可访问，确认 personal-private 中 feature/water-service 仍指向本地基线 3dcb5f5 后，提交 6957b3b 并推送到该已有私有仓库；没有推送上游，没有加入 IPA、公开 SDK 下载包、凭据或构建产物。
+
+[iOS 个人测试运行 36685124236](https://github.com/zhishouzhiqian/XhuTimetable-private/actions/runs/36685124236) 已触发，但任务在运行器启动前失败，steps 为空，没有构建日志或 IPA。GitHub 的失败注释指出账户付款或支出限额限制；另有 macOS arm64 排队容量通知。Android 个人测试也未启动运行器。此结果不能算作源码编译失败，也不能算作 iOS 编译成功。未修改账户付费设置、未反复重跑；需用户在 Billing & plans 恢复 Actions 使用条件后继续验证。iOS 校园 SDK 签名及真实客户端接入仍未完成。
