@@ -22,6 +22,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.twotone.ArrowForwardIos
+import androidx.compose.material.icons.twotone.LocalLaundryService
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -49,6 +50,7 @@ import coil3.compose.rememberAsyncImagePainter
 import kotlinx.coroutines.Dispatchers
 import org.koin.compose.viewmodel.koinViewModel
 import vip.mystery0.xhu.timetable.config.coroutine.safeLaunch
+import vip.mystery0.xhu.timetable.laundryServiceEnabled
 import vip.mystery0.xhu.timetable.config.trackEvent
 import vip.mystery0.xhu.timetable.model.Gender
 import vip.mystery0.xhu.timetable.model.event.MenuNavigator
@@ -56,6 +58,8 @@ import vip.mystery0.xhu.timetable.ui.component.TabContent
 import vip.mystery0.xhu.timetable.ui.component.TabTitle
 import vip.mystery0.xhu.timetable.ui.navigation.LocalNavController
 import vip.mystery0.xhu.timetable.ui.navigation.RouteWater
+import vip.mystery0.xhu.timetable.ui.navigation.RouteLaundry
+import vip.mystery0.xhu.timetable.ui.navigation.RouteLogin
 import vip.mystery0.xhu.timetable.ui.theme.ProfileImages
 import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
 import vip.mystery0.xhu.timetable.ui.theme.XhuImages
@@ -189,6 +193,14 @@ val profileCourseContent: TabContent = @Composable {
             tint = MaterialTheme.colorScheme.primary,
             click = { navController.navigate(RouteWater) },
         )
+        if (laundryServiceEnabled) {
+            BuildProfileItem(
+                painter = androidx.compose.ui.graphics.vector.rememberVectorPainter(Icons.TwoTone.LocalLaundryService),
+                title = "洗衣服务",
+                tint = MaterialTheme.colorScheme.primary,
+                click = { navController.navigate(RouteLaundry()) },
+            )
+        }
         HorizontalDivider(
             modifier = Modifier
                 .fillMaxWidth()
@@ -196,33 +208,41 @@ val profileCourseContent: TabContent = @Composable {
                 .background(MaterialTheme.colorScheme.outline)
         )
 
-        val menuList by profileViewModel.menu.collectAsState()
-        val hasUnReadNotice by profileViewModel.hasUnReadNotice.collectAsState()
-        val hasUnReadFeedback by profileViewModel.hasUnReadFeedback.collectAsState()
-        menuList.forEach {
-            it.forEach { menu ->
-                val item = MenuItem.parseKey(menu.key.uppercase())
-                val showBadge = when (item) {
-                    MenuItem.NOTICE -> hasUnReadNotice
-                    MenuItem.FEEDBACK -> hasUnReadFeedback
-                    else -> false
+        if (mainUser == null) {
+            BuildProfileItem(
+                painter = XhuIcons.Profile.accountSettings,
+                title = "登录西瓜课表",
+                click = { navController.navigate(RouteLogin(false)) },
+            )
+        } else {
+            val menuList by profileViewModel.menu.collectAsState()
+            val hasUnReadNotice by profileViewModel.hasUnReadNotice.collectAsState()
+            val hasUnReadFeedback by profileViewModel.hasUnReadFeedback.collectAsState()
+            menuList.forEach {
+                it.forEach { menu ->
+                    val item = MenuItem.parseKey(menu.key.uppercase())
+                    val showBadge = when (item) {
+                        MenuItem.NOTICE -> hasUnReadNotice
+                        MenuItem.FEEDBACK -> hasUnReadFeedback
+                        else -> false
+                    }
+                    BuildProfileItem(
+                        painter = item.icon(),
+                        title = menu.title,
+                        showBadge = showBadge,
+                        click = {
+                            coroutineScope.safeLaunch(Dispatchers.Main) {
+                                trackEvent("点击菜单 ${menu.key}")
+                                item.action(MenuNavigator(navController, uriHandler, context), menu)
+                            }
+                        })
+                    HorizontalDivider(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(1.dp)
+                            .background(MaterialTheme.colorScheme.outline)
+                    )
                 }
-                BuildProfileItem(
-                    painter = item.icon(),
-                    title = menu.title,
-                    showBadge = showBadge,
-                    click = {
-                        coroutineScope.safeLaunch(Dispatchers.Main) {
-                            trackEvent("点击菜单 ${menu.key}")
-                            item.action(MenuNavigator(navController, uriHandler, context), menu)
-                        }
-                    })
-                HorizontalDivider(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .background(MaterialTheme.colorScheme.outline)
-                )
             }
         }
     }

@@ -2,6 +2,7 @@ package vip.mystery0.xhu.timetable.ui.screen
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,6 +14,9 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material3.CenterAlignedTopAppBar
 import androidx.compose.material3.FlexibleBottomAppBar
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.twotone.QrCodeScanner
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -43,6 +47,7 @@ import kotlinx.coroutines.Dispatchers
 import org.jetbrains.compose.resources.DrawableResource
 import org.koin.compose.viewmodel.koinViewModel
 import vip.mystery0.xhu.timetable.base.HandleErrorMessage
+import vip.mystery0.xhu.timetable.laundryServiceEnabled
 import vip.mystery0.xhu.timetable.config.coroutine.safeLaunch
 import vip.mystery0.xhu.timetable.config.store.EventBus
 import vip.mystery0.xhu.timetable.config.trackEvent
@@ -58,6 +63,7 @@ import vip.mystery0.xhu.timetable.ui.navigation.LocalNavController
 import vip.mystery0.xhu.timetable.ui.navigation.RouteLogin
 import vip.mystery0.xhu.timetable.ui.navigation.RouteMain
 import vip.mystery0.xhu.timetable.ui.navigation.RouteWater
+import vip.mystery0.xhu.timetable.ui.navigation.RouteLaundry
 import vip.mystery0.xhu.timetable.ui.theme.XhuIcons
 import vip.mystery0.xhu.timetable.model.water.WaterUiState
 import vip.mystery0.xhu.timetable.model.water.WaterStartDecision
@@ -109,8 +115,15 @@ fun MainScreen() {
                 },
                 navigationIcon = {
                     if (tab == Tab.TODAY) {
-                        WaterQuickControl(waterViewModel) {
-                            navController.navigate(RouteWater)
+                        Row {
+                            WaterQuickControl(waterViewModel) {
+                                navController.navigate(RouteWater)
+                            }
+                            if (laundryServiceEnabled) {
+                                IconButton(onClick = { navController.navigate(RouteLaundry(scanImmediately = true)) }) {
+                                    Icon(Icons.TwoTone.QrCodeScanner, contentDescription = "洗衣服务")
+                                }
+                            }
                         }
                     }
                 },

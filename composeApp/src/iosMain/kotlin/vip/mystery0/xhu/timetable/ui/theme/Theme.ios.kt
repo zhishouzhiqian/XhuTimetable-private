@@ -3,12 +3,9 @@ package vip.mystery0.xhu.timetable.ui.theme
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.ColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 
 @Composable
-actual fun getColorScheme(): ColorScheme {
-    val mode by Theme.nightMode.collectAsState()
+actual fun getColorScheme(mode: NightMode): ColorScheme {
     val isSystemInDarkTheme = isSystemInDarkTheme()
     return when (mode) {
         //强制开启夜间模式

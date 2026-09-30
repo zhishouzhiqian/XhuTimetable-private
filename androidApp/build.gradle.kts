@@ -41,6 +41,11 @@ kotlin {
 }
 
 android {
+    // 本机测试可选组件由 tools/prepare_tmall_login_debug.py 写入忽略的 build 目录。
+    sourceSets.getByName("debug") {
+        assets.srcDir(layout.buildDirectory.dir("generated/tmallDebug/assets").get().asFile)
+        jniLibs.srcDir(layout.buildDirectory.dir("generated/tmallDebug/jniLibs").get().asFile)
+    }
     namespace = packageName
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
@@ -51,10 +56,6 @@ android {
         versionCode = gitVersionCode
         versionName = appVersionName
 
-        ndk {
-            abiFilters.add("armeabi-v7a")
-            abiFilters.add("arm64-v8a")
-        }
         manifestPlaceholders["JPUSH_PKGNAME"] = packageName
         manifestPlaceholders["JPUSH_CHANNEL"] = libs.versions.pushChannel.get()
         manifestPlaceholders["HUAWEI_APPID"] = libs.versions.huaweiPushAppId.get()
@@ -65,6 +66,8 @@ android {
         manifestPlaceholders["VIVO_APPKEY"] = libs.versions.vivoPushAppKey.get()
     }
     packaging {
+        // 安全组件包含非标准 ELF 标记文件，必须保留原始字节。
+        jniLibs.keepDebugSymbols += "**/libsg*.so"
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
             excludes += "THIRD-PARTY.txt"
@@ -88,6 +91,7 @@ android {
 
     buildTypes {
         debug {
+            ndk { abiFilters.add("arm64-v8a") }
             applicationIdSuffix = ".debug"
             manifestPlaceholders["JPUSH_APPKEY"] = libs.versions.debugPushAppKey.get()
             resValue(
@@ -95,7 +99,7 @@ android {
                 "feature_api_key",
                 "65041db9-520c-4962-a512-34fd055abeae/41eFdAIdx5mMavrd4UYjJtpaz4UJEQWvFMTTmVhJ"
             )
-            resValue("string", "app_name", "西瓜课表-debug")
+            resValue("string", "app_name", "西瓜课表-测试版")
             resValue("string", "app_version_code", gitVersionCode.toString())
             resValue(
                 "string",
@@ -111,6 +115,10 @@ android {
             versionNameSuffix = ".d$gitVersionCode.$gitVersionName"
         }
         release {
+            ndk {
+                abiFilters.add("armeabi-v7a")
+                abiFilters.add("arm64-v8a")
+            }
             val nightly = System.getenv("NIGHTLY")?.toBoolean() == true
 
             manifestPlaceholders["JPUSH_APPKEY"] = libs.versions.releasePushAppKey.get()
@@ -177,6 +185,14 @@ dependencies {
     implementation(libs.androidx.lifecycle.viewmodel)
     implementation(platform(libs.koin.bom))
     implementation(libs.koin.android)
+    debugImplementation(libs.zxing.android.embedded)
+    debugImplementation(libs.runtime)
+    debugImplementation(libs.ui)
+    debugImplementation(libs.foundation)
+    debugImplementation(libs.material3)
+    debugImplementation(libs.androidx.lifecycle.runtimeCompose)
+    testImplementation(kotlin("test-junit"))
+    testImplementation(libs.json.tests)
 }
 
 apply(from = rootProject.file("signing.gradle"))

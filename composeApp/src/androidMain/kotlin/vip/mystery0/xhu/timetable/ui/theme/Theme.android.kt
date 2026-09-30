@@ -6,13 +6,10 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.compose.ui.platform.LocalContext
 
 @Composable
-actual fun getColorScheme(): ColorScheme {
-    val mode by Theme.nightMode.collectAsState()
+actual fun getColorScheme(mode: NightMode): ColorScheme {
     val isSystemInDarkTheme = isSystemInDarkTheme()
     when (mode) {
         NightMode.MATERIAL_YOU -> {

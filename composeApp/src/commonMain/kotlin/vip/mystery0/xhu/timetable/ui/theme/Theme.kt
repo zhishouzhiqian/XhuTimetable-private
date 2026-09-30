@@ -12,7 +12,13 @@ import vip.mystery0.xhu.timetable.config.store.GlobalConfigStore
 import vip.mystery0.xhu.timetable.ui.theme.XhuFonts.globalSet
 
 @Composable
-expect fun getColorScheme(): ColorScheme
+expect fun getColorScheme(mode: NightMode): ColorScheme
+
+@Composable
+fun getColorScheme(): ColorScheme {
+    val mode by Theme.nightMode.collectAsState()
+    return getColorScheme(mode)
+}
 
 @Composable
 fun isDarkMode(): Boolean {
@@ -29,7 +35,14 @@ fun isDarkMode(): Boolean {
 fun XhuTimetableTheme(
     content: @Composable () -> Unit
 ) {
-    val colorScheme = getColorScheme()
+    val mode by Theme.nightMode.collectAsState()
+    XhuTimetableTheme(mode, content)
+}
+
+/** 独立进程直接接收主题模式，避免读取主进程的配置存储。 */
+@Composable
+fun XhuTimetableTheme(mode: NightMode, content: @Composable () -> Unit) {
+    val colorScheme = getColorScheme(mode)
 
     val replacementTypography = MaterialTheme.typography.globalSet(XhuFonts.DEFAULT)
 

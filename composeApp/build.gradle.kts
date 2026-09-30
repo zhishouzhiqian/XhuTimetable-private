@@ -87,6 +87,7 @@ kotlin {
             implementation(libs.apache.compress)
             //jpush
             implementation(libs.androidx.annotation)
+            implementation(libs.androidx.webkit)
             implementation(libs.gson)
             implementation(libs.jpush)
             implementation(libs.jpush.plugin.huawei)

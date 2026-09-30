@@ -63,6 +63,20 @@ jobs:
           ./gradlew --configure-on-demand composeApp:exportLibraryDefinitions
           ./gradlew --configure-on-demand composeApp:updateAppleBuildVersion
 
+      - name: Run shared iOS state tests
+        run: ./gradlew --configure-on-demand composeApp:iosSimulatorArm64Test --stacktrace
+
+      - name: Upload iOS test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-state-tests-${{ github.run_number }}
+          path: |
+            composeApp/build/reports/tests/iosSimulatorArm64Test
+            composeApp/build/test-results/iosSimulatorArm64Test
+          if-no-files-found: warn
+          retention-days: 7
+
       - name: Build unsigned device app
         shell: bash
         run: |
