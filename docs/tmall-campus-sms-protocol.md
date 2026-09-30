@@ -517,3 +517,5 @@ iOS 新增页面宿主及 IosLaundryRuntime 注册边界，使用现有 Material
 用户选择改用已经登记的 Codemagic。新增根目录 codemagic.yaml，使用 mac_mini_m2、JDK 21 和 Xcode 26.2，沿用共享 iOS 测试及无签名个人测试 IPA；缓存依赖并保存测试与 Xcode 日志，仅手动触发。官方 schema、YAML 与脚本语法检查通过。浏览器控制连接失败，尚未确认 Codemagic 仓库导入、private_maven 加密变量配置或构建结果；账户侧步骤见 [Codemagic 个人测试构建说明](codemagic-ios-personal.md)。GitHub secret 不能读回迁移，须用户提供给 Codemagic 原始值。iOS 原生编译及真实校园客户端仍待验证。
 
 用户随后在 Codemagic 应用级 private_maven 组保存 GITHUB_USERNAME 与 NEXUS_PASSWORD，脚本兼容映射且不显示值。选择 feature/water-service 后成功识别 YAML。首次云端测试编译失败于原有 iosMain 和 iosSimulatorArm64Main 重复声明 isDebug；将设备实现移到 iosArm64Main 后，第二次 [构建 6abcd8ac083ff0a9a53aa753](https://codemagic.io/app/6abcc2cd6c98472e80a8cc91/build/6abcd8ac083ff0a9a53aa753) 的共享 iOS 测试执行通过、Xcode 设备构建成功、未签名 IPA 打包及 ZIP 校验通过。本地 composeApp:compileAndroidMain 通过。iOS 真实登录、SDK 签名兼容、设备扫码、微信与付款恢复仍未实测，平台客户端仍未接通；编译成功不等同于真实洗衣功能完成。
+
+用户安装后反馈洗衣入口不可见。继续接入时将 iOS 入口改为可见，并在客户端缺失时展示明确不可用页面；新增原生授权、扫码、微信桥接及取消/晚到回调隔离。Swift 启动安装原生 UI，真实校园 `IosLaundryLoginGateway` 仍缺实现，未假定登录或付款成功。本地共享 71 项测试及 Android debug 构建通过，iOS 云端与真机验收状态见 [iOS 洗衣接入说明](laundry-ios-integration.md)。

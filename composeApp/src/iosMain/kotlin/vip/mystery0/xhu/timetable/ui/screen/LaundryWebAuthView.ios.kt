@@ -12,15 +12,17 @@ import vip.mystery0.xhu.timetable.model.laundry.*
 import vip.mystery0.xhu.timetable.ui.screen.laundry.LaundryActions
 import vip.mystery0.xhu.timetable.ui.screen.laundry.LaundryContent
 import vip.mystery0.xhu.timetable.ui.screen.laundry.LaundryLoginContent
+import vip.mystery0.xhu.timetable.ui.screen.laundry.LaundryUnavailableContent
 import vip.mystery0.xhu.timetable.viewmodel.LaundryViewModel
 
 @Composable
 @OptIn(ExperimentalForeignApi::class)
 internal actual fun LaundryServiceHost(scanImmediately: Boolean, onExit: () -> Unit) {
+    val available by IosLaundryRuntime.availability.collectAsState()
     val gateway = IosLaundryRuntime.gateway
     val presenter = IosLaundryRuntime.presenter
-    if (gateway == null || presenter == null) {
-        LaundryLoginContent(false, "iOS 校园登录组件尚未接入，暂时无法登录。", onExit, {}, false) {}
+    if (!available || gateway == null || presenter == null) {
+        LaundryUnavailableContent(onExit)
         return
     }
     val scope = rememberCoroutineScope()

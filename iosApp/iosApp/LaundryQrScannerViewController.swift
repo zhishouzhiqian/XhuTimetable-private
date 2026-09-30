@@ -130,7 +130,8 @@ final class LaundryQrScannerViewController: UIViewController, AVCaptureMetadataO
             stopped = true
             if session.isRunning { session.stopRunning() }
         }
-        dismiss(animated: true) { [result] in result(contents, error) }
+        // 由桥接宿主统一关闭页面，取消和结果回调不会重复 dismiss。
+        result(contents, error)
     }
 
     private enum CameraFailure: Error { case unavailable }

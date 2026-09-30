@@ -8,6 +8,7 @@ struct iOSApp: App {
 
     init() {
         HelperKt.callAppInit()
+        LaundryNativeUi.install()
     }
     var body: some Scene {
         WindowGroup {

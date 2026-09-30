@@ -475,6 +475,31 @@ private fun StatusPill(text: String, color: Color = MaterialTheme.colorScheme.pr
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+fun LaundryUnavailableContent(onBack: () -> Unit) {
+    Scaffold(topBar = {
+        CenterAlignedTopAppBar(title = { Text("洗衣服务") }, navigationIcon = {
+            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
+        })
+    }) { padding ->
+        Column(Modifier.fillMaxSize().padding(padding).verticalScroll(rememberScrollState()).padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            Spacer(Modifier.height(24.dp))
+            Icon(Icons.Default.LocalLaundryService, null, Modifier.size(64.dp),
+                tint = MaterialTheme.colorScheme.primary)
+            Text("iOS 洗衣服务暂未开放", style = MaterialTheme.typography.titleLarge)
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer)) {
+                Text("校园登录和订单服务正在接入。当前版本暂不能登录、扫码下单或付款。",
+                    Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Button(onClick = onBack) { Text("返回课表") }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 fun LaundryLoginContent(busy: Boolean, error: String?, onBack: () -> Unit, onLogin: () -> Unit,
     webVisible: Boolean, webContent: @Composable () -> Unit) {
     Scaffold(topBar = {
