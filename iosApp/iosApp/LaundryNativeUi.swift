@@ -13,6 +13,7 @@ final class LaundryNativeUi: NSObject, IosLaundryNativeUi {
 
     static func install() {
 #if CAMPUS_COMPONENT_PROBE
+        CampusComponentProbeRequireEnabled()
         IosLaundryNativeBridge.shared.install(ui: LaundryNativeUi(), componentDiagnosticsEnabled: true)
 #else
         IosLaundryNativeBridge.shared.install(ui: LaundryNativeUi(), componentDiagnosticsEnabled: false)

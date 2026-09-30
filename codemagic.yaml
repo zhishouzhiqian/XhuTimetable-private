@@ -37,13 +37,6 @@ workflows:
           mkdir -p "$HOME/.gradle" build/ios-personal/logs
           printf '%s\n' 'org.gradle.configureondemand=true' >> "$HOME/.gradle/gradle.properties"
           cp iosApp/Configuration/Config.xcconfig.template iosApp/Configuration/Config.xcconfig
-          # 仅此个人检查工作流链接候选 SDK，普通构建不加载它。
-          cat >> iosApp/Configuration/Config.xcconfig <<'CONFIG'
-
-          FRAMEWORK_SEARCH_PATHS = $(inherited) "$(SRCROOT)/../build/campus-ios-probe/frameworks"
-          GCC_PREPROCESSOR_DEFINITIONS = $(inherited) CAMPUS_COMPONENT_PROBE=1
-          OTHER_LDFLAGS = $(inherited) -ObjC -lJCore -lJPush -framework SecurityGuardSDK -framework SGMain -framework SGMiddleTier -framework SGSecurityBody -lc++ -lz -lresolv -framework Security -framework SystemConfiguration -framework CoreTelephony -framework CoreMotion -framework WebKit
-          CONFIG
       - name: 准备候选校园安全组件
         script: |
           set -euo pipefail
@@ -67,6 +60,14 @@ workflows:
       - name: 编译未签名 iPhone 应用
         script: |
           set -euo pipefail
+          # updateAppleBuildVersion 会重写配置，必须在它执行完后追加检查包设置。
+          # 仅此个人检查工作流链接候选 SDK，普通构建不加载它。
+          cat >> iosApp/Configuration/Config.xcconfig <<'CONFIG'
+
+          FRAMEWORK_SEARCH_PATHS = $(inherited) "$(SRCROOT)/../build/campus-ios-probe/frameworks"
+          GCC_PREPROCESSOR_DEFINITIONS = $(inherited) CAMPUS_COMPONENT_PROBE=1
+          OTHER_LDFLAGS = $(inherited) -ObjC -lJCore -lJPush -framework SecurityGuardSDK -framework SGMain -framework SGMiddleTier -framework SGSecurityBody -lc++ -lz -lresolv -framework Security -framework SystemConfiguration -framework CoreTelephony -framework CoreMotion -framework WebKit
+          CONFIG
           xcodebuild \
             -project iosApp/iosApp.xcodeproj \
             -scheme iosApp \

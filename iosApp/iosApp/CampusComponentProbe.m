@@ -5,6 +5,8 @@
 #import <SecurityGuardSDK/Open/OpenStaticDataStore/IOpenStaticDataStoreComponent.h>
 #import <SecurityGuardSDK/Open/OpenSecurityBody/IOpenSecurityBodyComponent.h>
 #import <SGMiddleTier/ISecurityGuardOpenUnifiedSecurity.h>
+
+void CampusComponentProbeRequireEnabled(void) {}
 #endif
 
 @implementation CampusComponentProbe
