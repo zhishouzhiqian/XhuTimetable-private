@@ -29,6 +29,8 @@ static NSString *folder;
     return @{@"x-sign": [NSString stringWithFormat:@"private-sign-%d", signCalls],
         @"x-mini-wua": @"private-mini", @"x-sgext": @"private-ext", @"x-umt": @"private-device"};
 }
+@end
+
 @interface ProbeBody : NSObject
 @end
 @implementation ProbeBody
