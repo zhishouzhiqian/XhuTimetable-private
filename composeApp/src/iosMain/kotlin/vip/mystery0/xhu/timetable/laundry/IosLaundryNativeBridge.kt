@@ -14,6 +14,7 @@ interface IosLaundryLoginGateway : LaundryGateway {
 
 /** Swift 只管理原生页面；不处理校园会话、签名或付款结果。 */
 interface IosLaundryNativeUi {
+    fun componentCheck(requestId: Long)
     fun authorize(url: String, requestId: Long)
     fun scan(requestId: Long)
     fun openWechat(uri: String, requestId: Long)
@@ -21,14 +22,17 @@ interface IosLaundryNativeUi {
 }
 
 object IosLaundryNativeBridge {
+    var componentDiagnosticsEnabled: Boolean = false
+        private set
     private var ui: IosLaundryNativeUi? = null
     private val guard = LaundryNativeRequestGuard()
     private var pending: CancellableContinuation<IosLaundryScanResult>? = null
     private val cleanup = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
-    fun install(ui: IosLaundryNativeUi) {
+    fun install(ui: IosLaundryNativeUi, componentDiagnosticsEnabled: Boolean = false) {
         check(this.ui == null) { "原生洗衣桥接只能初始化一次" }
         this.ui = ui
+        this.componentDiagnosticsEnabled = componentDiagnosticsEnabled
     }
 
     /** Swift 在主线程返回；旧页面的结果不能交给新页面。 */
@@ -67,6 +71,10 @@ object IosLaundryNativeBridge {
     }
 
     internal suspend fun scan(): IosLaundryScanResult = awaitResult { native, id -> native.scan(id) }
+
+    internal suspend fun componentCheck() {
+        if (componentDiagnosticsEnabled) awaitResult { native, id -> native.componentCheck(id) }
+    }
 
     internal suspend fun openWechat(uri: String): String? {
         if (!LaundryAuthorizationPolicy.acceptsWechat(uri)) return "付款链接无效，订单已保留。"

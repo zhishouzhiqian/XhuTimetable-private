@@ -22,7 +22,21 @@ iOS 的课表左上角和个人页显示洗衣入口。校园客户端尚未就�
 
 下一阶段需要验证当前 iOS bundle 下校园 SDK/签名适配与配置，先验证新设备注册、当次安全字段、会话转换和只读订单查询，再开放创建与付款。现有 IPA 主程序声明加密，没有可直接链接的校园 SDK；重新签名西瓜课表 IPA 不会补齐这些能力。组件复用是否可行仍待验证，不把新权限或安全图片当作已经确定的必要条件。
 
-## 本轮验证
+## 个人组件检查包
+
+进一步检查候选 SDK 头文件，`SGMiddleTier/ISecurityGuardOpenUnifiedSecurity.h` 提供 `init:error:` 与 `getSecurityFactors:error:`，声明返回 `x-sign`、`x-mini-wua`、`x-umt`、`x-sgext`。与 Android 方法不同名，之前仅搜索 `getUnifiedSign` 的结果不能代表没有统一签名能力。
+
+Codemagic 个人工作流使用固定 SHA-256 校验的公开包，只链接 SecurityGuardSDK、SGMain、SGMiddleTier、SGSecurityBody。检查入口由 `CAMPUS_COMPONENT_PROBE` 开关控制；普通构建不加载候选 SDK。原 IPA 的两个安全资源只提取到本地检查 JSON，用户在 iPhone 文件选择器导入，不提交 Git 或上传 CI。
+
+检查页后台执行 SDK 初始化、读取配置、当次安全字段生成和统一签名字段存在性检查，只显示固定步骤和数值错误码，不展示签名或设备标识。每个进程执行一次，防止 SDK 单例加载后更换资源；关闭页面后仍保留结果，45 秒未返回显示超时。签名入参是唯一当次诊断输入，不是 MTOP 规范串，也不会作为请求发送。
+
+安装步骤：下载本轮 IPA → 自行签名安装 → 个人页“洗衣服务” → “组件检查” → 导入本地 `campus-ios-check-resources.json` → “开始组件检查” → 保存结果截图。重新检查需彻底关闭并重新启动应用，再导入资源。
+
+本地字段生成成功只证明候选组件能执行，不能证明服务器认可、设备注册成功或校园登录可用。下一阶段仍需生成规范新请求并核验只读服务端响应，再接通授权和校园会话；当前检查包不创建或支付订单。
+
+组件检查包的 Xcode 编译与真机 SDK 结果：待本轮验证。
+
+## 已完成的基础验证
 
 - `composeApp:testAndroidHostTest`：71 项通过，包含新增授权回调、跳转来源、微信路由、重复/取消回调测试。
 - `androidApp:assembleDebug`：standard/store debug 均成功；安卓仍本地构建。

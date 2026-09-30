@@ -475,7 +475,7 @@ private fun StatusPill(text: String, color: Color = MaterialTheme.colorScheme.pr
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun LaundryUnavailableContent(onBack: () -> Unit) {
+fun LaundryUnavailableContent(onBack: () -> Unit, onComponentCheck: (() -> Unit)? = null) {
     Scaffold(topBar = {
         CenterAlignedTopAppBar(title = { Text("洗衣服务") }, navigationIcon = {
             IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回") }
@@ -494,6 +494,7 @@ fun LaundryUnavailableContent(onBack: () -> Unit) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Button(onClick = onBack) { Text("返回课表") }
+            onComponentCheck?.let { check -> OutlinedButton(onClick = check) { Text("组件检查") } }
         }
     }
 }

@@ -8,6 +8,8 @@ import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.coroutines.CancellationException
 import platform.Foundation.NSProcessInfo
 import vip.mystery0.xhu.timetable.laundry.IosLaundryRuntime
+import vip.mystery0.xhu.timetable.laundry.IosLaundryNativeBridge
+import kotlinx.coroutines.launch
 import vip.mystery0.xhu.timetable.model.laundry.*
 import vip.mystery0.xhu.timetable.ui.screen.laundry.LaundryActions
 import vip.mystery0.xhu.timetable.ui.screen.laundry.LaundryContent
@@ -22,7 +24,17 @@ internal actual fun LaundryServiceHost(scanImmediately: Boolean, onExit: () -> U
     val gateway = IosLaundryRuntime.gateway
     val presenter = IosLaundryRuntime.presenter
     if (!available || gateway == null || presenter == null) {
-        LaundryUnavailableContent(onExit)
+        val scope = rememberCoroutineScope()
+        var checking by remember { mutableStateOf(false) }
+        LaundryUnavailableContent(onExit, if (IosLaundryNativeBridge.componentDiagnosticsEnabled) {
+            {
+                if (!checking) scope.launch {
+                    checking = true
+                    try { IosLaundryNativeBridge.componentCheck() }
+                    finally { checking = false }
+                }
+            }
+        } else null)
         return
     }
     val scope = rememberCoroutineScope()

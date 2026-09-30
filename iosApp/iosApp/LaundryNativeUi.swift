@@ -12,7 +12,17 @@ final class LaundryNativeUi: NSObject, IosLaundryNativeUi {
     private var wechatReturned = false
 
     static func install() {
-        IosLaundryNativeBridge.shared.install(ui: LaundryNativeUi())
+#if CAMPUS_COMPONENT_PROBE
+        IosLaundryNativeBridge.shared.install(ui: LaundryNativeUi(), componentDiagnosticsEnabled: true)
+#else
+        IosLaundryNativeBridge.shared.install(ui: LaundryNativeUi(), componentDiagnosticsEnabled: false)
+#endif
+    }
+
+    func componentCheck(requestId: Int64) {
+        guard begin(requestId) else { return }
+        let controller = LaundryComponentCheckViewController { [weak self] in self?.finish(requestId) }
+        present(controller, requestId)
     }
 
     func authorize(url: String, requestId: Int64) {

@@ -37,6 +37,19 @@ workflows:
           mkdir -p "$HOME/.gradle" build/ios-personal/logs
           printf '%s\n' 'org.gradle.configureondemand=true' >> "$HOME/.gradle/gradle.properties"
           cp iosApp/Configuration/Config.xcconfig.template iosApp/Configuration/Config.xcconfig
+          # 仅此个人检查工作流链接候选 SDK，普通构建不加载它。
+          cat >> iosApp/Configuration/Config.xcconfig <<'CONFIG'
+
+          FRAMEWORK_SEARCH_PATHS = $(inherited) "$(SRCROOT)/../build/campus-ios-probe/frameworks"
+          GCC_PREPROCESSOR_DEFINITIONS = $(inherited) CAMPUS_COMPONENT_PROBE=1
+          OTHER_LDFLAGS = $(inherited) -ObjC -lJCore -lJPush -framework SecurityGuardSDK -framework SGMain -framework SGMiddleTier -framework SGSecurityBody -lc++ -lz -lresolv -framework Security -framework SystemConfiguration -framework CoreTelephony -framework CoreMotion -framework WebKit
+          CONFIG
+      - name: 准备候选校园安全组件
+        script: |
+          set -euo pipefail
+          # 官方公开包使用固定 SHA-256 校验；不上传 IPA 安全资源。
+          python3 -m unittest discover -s tools -p 'test_prepare_campus_ios_probe.py'
+          python3 tools/prepare_campus_ios_probe.py --frameworks-output build/campus-ios-probe/frameworks
       - name: 更新许可证及 Apple 版本号
         script: |
           set -euo pipefail
@@ -60,7 +73,7 @@ workflows:
             CODE_SIGN_IDENTITY= \
             CODE_SIGN_ENTITLEMENTS= \
             DEVELOPMENT_TEAM= \
-            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) PERSONAL_TEST_BUILD' \
+            SWIFT_ACTIVE_COMPILATION_CONDITIONS='$(inherited) PERSONAL_TEST_BUILD CAMPUS_COMPONENT_PROBE' \
             build 2>&1 | tee build/ios-personal/logs/xcodebuild.log
       - name: 打包个人测试 IPA
         script: |
