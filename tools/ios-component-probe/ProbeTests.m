@@ -71,6 +71,16 @@ static void Check(BOOL condition, NSString *message);
 static void Check(BOOL condition, NSString *message) {
     if (!condition) { fprintf(stderr, "%s\n", message.UTF8String); exit(1); }
 }
+static NSString *ReportResult(NSArray *rows, NSString *step) {
+    for (NSDictionary *row in rows) {
+        if ([row[@"step"] isEqualToString:step]) return row[@"result"];
+    }
+    return nil;
+}
+static void CheckReportResult(NSArray *rows, NSString *step, NSString *expected) {
+    Check([ReportResult(rows, step) isEqualToString:expected],
+        [NSString stringWithFormat:@"阶段“%@”应返回“%@”", step, expected]);
+}
 static void CheckInputContract(void) {
     NSData *body = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *headers = @{@"x-t": @"1700000000", @"x-uid": @"sample-uid", @"x-reqbiz-ext": @"sample-biz",
@@ -108,20 +118,42 @@ static void RunCase(int number) {
     [CampusComponentProbe runAtResourcePath:folder appKeyHint:number == 0 ? nil : @"mock-input-key"
         progress:^(NSArray *rows) { progressCount++; }
         completion:^(NSArray *rows) {
-            NSString *report = rows.description;
+            // 集合 description 是调试表示，可能将中文转义为 Unicode；断言直接读取报告字段。
+            NSMutableArray *reportParts = [NSMutableArray array];
+            for (NSDictionary *row in rows) {
+                [reportParts addObject:row[@"step"]];
+                [reportParts addObject:row[@"result"]];
+            }
+            NSString *report = [reportParts componentsJoinedByString:@"\n"];
             Check(progressCount > 0, @"应提供阶段进度");
             Check(![report containsString:@"private-"] && ![report containsString:@"mock-input-key"], @"报告不得包含安全字段或输入值");
             Check(![report containsString:folder], @"报告不得包含资源沙盒路径");
             if (number == 0) Check(initCalls == 1 && signCalls == 0, @"AppKey 为空仍应检查统一签名初始化");
-            if (number == 1) Check(initCalls == 1 && signCalls == 2, @"提供 AppKey 时应使用两个新输入生成签名");
+            if (number == 1) {
+                Check(initCalls == 1 && signCalls == 2, @"提供 AppKey 时应使用两个新输入生成签名");
+                CheckReportResult(rows, @"生成本地签名字段", @"成功");
+                CheckReportResult(rows, @"更换输入重新生成签名", @"成功");
+                CheckReportResult(rows, @"两次签名比较", @"不同，已随输入变化");
+            }
             if (number == 2) Check(managerCalls == 0, @"资源完整性失败时不能进入 SDK");
             else Check(unifiedPathMatched, @"统一签名必须收到已校验资源路径，参数拼写为 customBundelPath");
             if (number == 3) Check(initCalls == 1 && signCalls == 0 && [report containsString:@"445"], @"保留 SDK 错误码并禁止失败后的签名调用");
-            if (number == 4) Check(signCalls == 2 && [report containsString:@"必需安全字段不完整"] &&
-                [report containsString:@"缺少签名，无法比较"], @"非空但不完整的字典不能判定签名成功");
-            if (number == 5) Check(signCalls == 2 && [report containsString:@"778"] &&
-                [report containsString:@"缺少签名，无法比较"], @"有 SDK 错误时即使字段齐全也不能判定成功");
-            if (number == 6) Check(signCalls == 2 && [report containsString:@"相同，需继续分析"], @"固定签名不能当作随新输入变化");
+            if (number == 4) {
+                Check(signCalls == 2, @"残缺字典场景应完成两次离线调用");
+                CheckReportResult(rows, @"生成本地签名字段", @"必需安全字段不完整；不能判定签名成功");
+                CheckReportResult(rows, @"更换输入重新生成签名", @"必需安全字段不完整；不能判定签名成功");
+                CheckReportResult(rows, @"两次签名比较", @"缺少签名，无法比较");
+            }
+            if (number == 5) {
+                Check(signCalls == 2, @"SDK 错误场景应完成两次离线调用");
+                CheckReportResult(rows, @"生成本地签名字段", @"失败（SDK 错误码 778）");
+                CheckReportResult(rows, @"更换输入重新生成签名", @"失败（SDK 错误码 778）");
+                CheckReportResult(rows, @"两次签名比较", @"缺少签名，无法比较");
+            }
+            if (number == 6) {
+                Check(signCalls == 2, @"固定签名场景应完成两次离线调用");
+                CheckReportResult(rows, @"两次签名比较", @"相同，需继续分析");
+            }
             completedTests++;
             if (number < 6) RunCase(number + 1);
             else { [[NSFileManager defaultManager] removeItemAtPath:folder error:nil]; printf("%d 项原生检查流程测试通过。\n", completedTests); exit(0); }
