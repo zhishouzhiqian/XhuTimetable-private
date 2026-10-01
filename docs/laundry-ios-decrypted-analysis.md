@@ -121,3 +121,19 @@ python tools/audit_campus_ios_signing.py --ipa <本地破壳IPA> --output build/
 可执行的解决方向是取得与校园安全资源相兼容的可链接 iOS SDK/插件组合，或取得与候选 SDK、应用身份及目标校园业务相配套的授权资源。随意申请普通百川资源不保证可调用校园接口；单纯换成版本号较新的公开 SDK 也不保证兼容。现有 IPA 中相关实现静态链接在完整主程序内，尚无已验证的独立 framework 可直接替换；此前已核对的公开下载包仍是失败的候选组合。当前尚未取得替代组件，不能宣称已修复或要求用户重复构建验证。
 
 检查报告新增 204 的准确解释，新增第 11 个原生桩场景；原生测试留待下一次具有实际组件变更的 macOS 构建执行，本机 Windows 无法运行。仅此报告与文档修订无需再次打包。iOS 登录、订单及付款仍未开放。
+
+## 资源路径与组件来源复核（2026-10-02）
+
+继续核对已固定 SHA-256 的候选 SDK bitcode，`SecurityGuardOpenInitialize.privateInitialize:withCustomBundlePath:` 的实际目录分支如下：
+
+1. 通过 `bundleForClass:` 取得初始化组件所在 Bundle；仅当其路径以 `.xctest` 结尾时使用该 Bundle 目录。字符串来自 `CMa02zrMMdolgt` 指向的 `CMa02Uj8cpN7hS`，按函数中的常量恢复得到 `.xctest`。不是 `.framework` 或 `.bundle`。
+2. 不属于测试 Bundle 时，非空的 `withCustomBundlePath:` 参数直接进入路径选择结果；参数为 nil 才退回主应用 Bundle 目录。
+3. 所选路径转成 UTF-8，作为 `__sbuf` 写入 `InitializeParameterContext` 第 2 号字段，传入原生命令 `10501`。这说明当前宿主的普通应用路径分支会向原生层传递导入目录，而非包装层无条件改用主 Bundle。
+
+以上是静态控制流证据，不等于观察到了真机最终打开的资源文件；底层的文件选择、缓存或其他 I/O 行为仍没有运行时路径记录。此前报告中的“显式使用导入目录”只能证明调用参数，不能扩大为文件访问已验证。进一步动态验证应观察成功打开的目标资源文件及其摘要，并与导入文件比较，不能仅打印传入路径或用目录存在代替。
+
+同时复核资源准备与导入：Python 只接受 IPA 的 `Payload/<主应用>.app/` 根目录下唯一同名资源，按原始字节 Base64 编码；Swift 解码后使用 `Data.write` 原样写入，未经过 UIImage、JPEG 编码或图像压缩；manifest 与文件摘要用于验证导入后完整性。因此当前没有“导入时图片转码”或“仅凭 basename 误选嵌套资源”的代码证据。
+
+再次访问[官方 SDK 下载页](https://jaq-doc.alibaba.com/docs/doc.htm?articleId=106383&docType=1&treeId=129)，页面标注更新于 2026/04/08，iOS 旗舰版仍列出 `5.0.0.18`（即目前已测试的发行包）。本轮对校园 `6.8.260603` 及 iOS 安全组件的公开检索未找到可核验的对应发行包；检索无结果不代表该组件不存在。其他阿里产品的同名 framework 不构成校园兼容性证明，不据此替换项目依赖。
+
+下一步所需材料：可合法用于本项目及校园业务的 iOS 安全 SDK 发行包，至少包含 SecurityGuardSDK、SGMain、SGMiddleTier、SGSecurityBody 的配套版本、头文件及 arm64 库，并说明配套资源、authCode 和应用身份要求。交付的资源应能服务于校园目标业务，不能以普通百川示例资源代替。拿到材料后先进行离线包完整性/架构/协议检查，再测试读取 AppKey、统一初始化和完整的新签名，最后才做服务端只读验证。当前尚未获得该材料；本轮没有 SDK 替换或已验证修复，不要求重新构建。
