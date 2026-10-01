@@ -71,7 +71,9 @@ static NSString *ProbeDigest(NSData *data) {
                 NSError *error = nil;
                 stage = @"SDK 初始化";
                 emit(stage, @"正在执行");
-                OpenSecurityGuardManager *manager = [OpenSecurityGuardManager getInstance:@"" withCustomBundlePath:path error:&error];
+                // 厂商无参入口传 nil；空字符串会作为非空 UTF-8 指针进入底层，不能假定与默认值等价。
+                emit(@"认证参数", @"使用 SDK 默认 authCode；未提供值，不使用显式空字符串");
+                OpenSecurityGuardManager *manager = [OpenSecurityGuardManager getInstance:nil withCustomBundlePath:path error:&error];
                 record(stage, manager != nil && error == nil, error);
                 if (manager && !error) {
                     NSString *version = [manager getSDKVersion];
@@ -97,7 +99,7 @@ static NSString *ProbeDigest(NSData *data) {
                             emit(@"静态配置协议接口", store ? @"可获取" : @"未返回组件");
                         }
                         if (store) {
-                            appKey = [store getAppKey:@0 authCode:@""];
+                            appKey = [store getAppKey:@0 authCode:nil];
                             emit(@"读取 AppKey（索引 0）", appKey.length > 0 ? @"成功（值不展示）" :
                                 @"返回空值；此接口不提供 NSError，原因尚不确定");
                         }
@@ -127,7 +129,7 @@ static NSString *ProbeDigest(NSData *data) {
                             // 该版本二进制读取 customBundelPath（Bundel 是厂商参数原名）。
                             // 两个初始化入口分别显式传入同一目录。
                             emit(@"统一签名资源路径", @"显式使用已校验的导入目录（路径不展示）");
-                            ready = [unified init:@{@"authCode": @"", @"customBundelPath": path} error:&error];
+                            ready = [unified init:@{@"customBundelPath": path} error:&error];
                             record(stage, ready && error == nil, error);
                             ready = ready && error == nil;
                         }
@@ -139,7 +141,7 @@ static NSString *ProbeDigest(NSData *data) {
                             error = nil;
                             NSString *time = [NSString stringWithFormat:@"%.0f", NSDate.date.timeIntervalSince1970 * 1000];
                             NSString *wua = [[manager getSecurityBodyComp] getSecurityBodyDataEx:time appKey:appKey
-                                authCode:@"" extendParam:nil flag:4 env:0 error:&error];
+                                authCode:nil extendParam:nil flag:4 env:0 error:&error];
                             record(stage, wua.length > 0 && error == nil, error);
                         } @catch (NSException *exception) { emit(stage, @"发生异常（正文已隐藏）"); }
                         if (ready) {
@@ -160,7 +162,7 @@ static NSString *ProbeDigest(NSData *data) {
                                 if (attempt == 0) emit(@"签名输入契约", @"iOS MTOP 的 22 个字段、秒级时间与同一正文 MD5；仅离线诊断，未发送请求");
                                 error = nil;
                                 NSDictionary *factors = [unified getSecurityFactors:@{@"appkey": appKey, @"data": data,
-                                    @"api": @"mtop.sys.newdeviceid", @"useWua": @NO, @"env": @0, @"authCode": @"",
+                                    @"api": @"mtop.sys.newdeviceid", @"useWua": @NO, @"env": @0,
                                     @"extendParas": @{}, @"requestId": NSUUID.UUID.UUIDString} error:&error];
                                 BOOL complete = CampusMtopProbeFactorsComplete(factors, error);
                                 record(stage, complete, error);

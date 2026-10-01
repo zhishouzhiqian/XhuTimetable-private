@@ -19,13 +19,17 @@ static void Check(BOOL condition, NSString *message);
 @interface ProbeStore : NSObject
 @end
 @implementation ProbeStore
-- (NSString *)getAppKey:(NSNumber *)index authCode:(NSString *)code { return nil; }
+- (NSString *)getAppKey:(NSNumber *)index authCode:(NSString *)code {
+    Check(code == nil, @"静态配置应使用默认 authCode，不能用空字符串替代");
+    return nil;
+}
 @end
 @interface ProbeUnified : NSObject
 @end
 @implementation ProbeUnified
 - (BOOL)init:(NSDictionary *)params error:(NSError **)error {
     initCalls++;
+    Check(params[@"authCode"] == nil, @"统一初始化应省略可选 authCode");
     unifiedPathMatched = [params[@"customBundelPath"] isEqualToString:folder] &&
         params[@"customBundlePath"] == nil;
     if (failInitialization) { *error = [NSError errorWithDomain:@"Mock" code:445 userInfo:nil]; return NO; }
@@ -33,6 +37,7 @@ static void Check(BOOL condition, NSString *message);
 }
 - (NSDictionary *)getSecurityFactors:(NSDictionary *)params error:(NSError **)error {
     signCalls++;
+    Check(params[@"authCode"] == nil, @"离线签名应省略可选 authCode");
     NSArray *fields = [params[@"data"] componentsSeparatedByString:@"&"];
     Check(fields.count == 22 && [fields[0] length] == 24 && [fields[4] length] == 32 &&
         [fields[5] length] == 10 && [fields[6] isEqualToString:@"mtop.sys.newdeviceid"] &&
@@ -54,11 +59,13 @@ static void Check(BOOL condition, NSString *message);
 @implementation ProbeBody
 - (NSString *)getSecurityBodyDataEx:(NSString *)time appKey:(NSString *)key authCode:(NSString *)code
                        extendParam:(NSDictionary *)extra flag:(int)flag env:(int)env error:(NSError **)error {
+    Check(code == nil, @"登录安全字段应使用默认 authCode");
     return @"private-wua";
 }
 @end
 @implementation OpenSecurityGuardManager
 + (instancetype)getInstance:(NSString *)code withCustomBundlePath:(NSString *)path error:(NSError **)error {
+    Check(code == nil && [path isEqualToString:folder], @"管理器应使用默认 authCode 和已校验的资源目录");
     managerCalls++;
     return [self new];
 }
