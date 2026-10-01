@@ -1,5 +1,8 @@
 #import "CampusComponentProbe.h"
 #import <CommonCrypto/CommonDigest.h>
+#import "CampusMtopProbeInput.h"
+#include <math.h>
+#include <stdlib.h>
 
 #if CAMPUS_COMPONENT_PROBE
 #import <SecurityGuardSDK/Open/OpenSecurityGuardManager.h>
@@ -74,7 +77,16 @@ static NSString *ProbeDigest(NSData *data) {
                     NSString *version = [manager getSDKVersion];
                     NSCharacterSet *digits = [NSCharacterSet characterSetWithCharactersInString:@"0123456789."];
                     if (version.length > 0 && version.length < 40 &&
-                        [version rangeOfCharacterFromSet:digits.invertedSet].location == NSNotFound) emit(@"SDK 版本", version);
+                        [version rangeOfCharacterFromSet:digits.invertedSet].location == NSNotFound) {
+                        emit(@"SDK 版本", version);
+                        emit(@"校园组件版本对照", [version isEqualToString:@"6.8.260603"] ?
+                            @"与已检查的校园 5.7.2 主程序版本一致；运行兼容仍待验证" :
+                            @"与已检查的校园 5.7.2（6.8.260603）不同；不据此判定资源或签名不兼容");
+                    }
+                    // 官方 App 用内部入口读取 AppKey；这里只核对类是否链接，不初始化另一套单例。
+                    emit(@"校园 AppKey 入口对照", NSClassFromString(@"SecurityGuardManager") ?
+                        @"内部管理器类已链接；当前检查使用 Open 入口，尚未验证与校园入口等价" :
+                        @"未找到校园使用的内部管理器类；当前检查仅覆盖 Open 入口");
                     NSString *appKey = nil;
                     stage = @"静态配置组件";
                     @try {
@@ -135,20 +147,31 @@ static NSString *ProbeDigest(NSData *data) {
                             for (int attempt = 0; attempt < 2; attempt++) {
                                 stage = attempt == 0 ? @"生成本地签名字段" : @"更换输入重新生成签名";
                                 emit(stage, @"正在执行");
-                                // 唯一诊断输入不作为 MTOP 请求发送。
-                                NSDictionary *input = @{@"probe": @"campus-ios-component", @"nonce": NSUUID.UUID.UUIDString};
+                                // 每次新建无账号的诊断设备标识；规范字段形状不代表真实设备注册。
+                                unsigned char randomBytes[18];
+                                arc4random_buf(randomBytes, sizeof(randomBytes));
+                                NSString *utdid = [[NSData dataWithBytes:randomBytes length:sizeof(randomBytes)] base64EncodedStringWithOptions:0];
+                                NSDictionary *input = @{@"device_global_id": utdid};
                                 NSData *json = [NSJSONSerialization dataWithJSONObject:input options:0 error:nil];
-                                NSString *data = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+                                NSString *timestamp = [NSString stringWithFormat:@"%.0f", floor(NSDate.date.timeIntervalSince1970)];
+                                NSString *data = CampusMtopProbeSignData(json, utdid, appKey, @"mtop.sys.newdeviceid", @"4.0",
+                                    @{@"x-t": timestamp, @"x-ttid": @"campus-ios-component-probe"});
+                                if (!data) { emit(stage, @"无法组装离线 MTOP 输入；未调用签名"); break; }
+                                if (attempt == 0) emit(@"签名输入契约", @"iOS MTOP 的 22 个字段、秒级时间与同一正文 MD5；仅离线诊断，未发送请求");
                                 error = nil;
                                 NSDictionary *factors = [unified getSecurityFactors:@{@"appkey": appKey, @"data": data,
-                                    @"api": @"mtop.sys.newdeviceid", @"useWua": @NO, @"env": @0, @"authCode": @""} error:&error];
-                                record(stage, factors.count > 0 && error == nil, error);
+                                    @"api": @"mtop.sys.newdeviceid", @"useWua": @NO, @"env": @0, @"authCode": @"",
+                                    @"extendParas": @{}, @"requestId": NSUUID.UUID.UUIDString} error:&error];
+                                BOOL complete = CampusMtopProbeFactorsComplete(factors, error);
+                                record(stage, complete, error);
+                                if (!complete && !error) emit(stage, @"必需安全字段不完整；不能判定签名成功");
                                 NSString *sign = nil;
+                                NSDictionary *safeFactors = [factors isKindOfClass:NSDictionary.class] ? factors : nil;
                                 for (NSString *key in @[@"x-sign", @"x-mini-wua", @"x-umt", @"x-sgext"]) {
-                                    id value = factors[key];
+                                    id value = safeFactors[key];
                                     BOOL valid = [value isKindOfClass:NSString.class] && [value length] > 0;
                                     if (attempt == 0) emit(key, valid ? @"已生成（值不展示）" : @"为空或未返回");
-                                    if (valid && [key isEqualToString:@"x-sign"]) sign = value;
+                                    if (complete && [key isEqualToString:@"x-sign"]) sign = value;
                                 }
                                 if (attempt == 0) previous = sign;
                                 else emit(@"两次签名比较", previous.length && sign.length ?
