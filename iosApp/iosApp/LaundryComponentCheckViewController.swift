@@ -59,7 +59,7 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
         appKeyField.adjustsFontForContentSizeCategory = true
         appKeyField.accessibilityLabel = "可选 AppKey，留空时从资源读取"
         let hint = UILabel()
-        hint.text = "AppKey 可留空。只有配置读取为空且已知抓包中的 AppKey 时才填写；不要填写 Cookie、token 或验证码。"
+        hint.text = "AppKey 可留空。只有统一签名初始化成功、配置读取为空且已知 AppKey 时才用于核对；它不能修复初始化失败。不要填写 Cookie、token 或验证码。"
         hint.font = .preferredFont(forTextStyle: .footnote)
         hint.textColor = .secondaryLabel
         hint.numberOfLines = 0

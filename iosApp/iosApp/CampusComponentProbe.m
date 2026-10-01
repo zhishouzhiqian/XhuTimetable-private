@@ -180,7 +180,9 @@ static NSString *ProbeDigest(NSData *data) {
                                     ([previous isEqualToString:sign] ? @"相同，需继续分析" : @"不同，已随输入变化") : @"缺少签名，无法比较");
                             }
                         } else emit(@"签名生成", @"跳过：统一签名初始化未成功");
-                    } else emit(@"安全字段及签名生成", @"跳过：没有 AppKey；可填写抓包中的 AppKey 后重启重试");
+                    } else emit(@"安全字段及签名生成", ready ?
+                        @"跳过：没有 AppKey；可提供已知 AppKey 核对，但不能证明资源与它匹配" :
+                        @"跳过：统一签名初始化失败且没有 AppKey；手工填写 AppKey 不能修复初始化失败");
                 }
 #else
                 emit(@"候选 SDK", @"检查包未启用组件，请更换构建（PROBE_NOT_ENABLED）");
