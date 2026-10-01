@@ -12,13 +12,13 @@ sdk_path="$(xcrun --sdk iphoneos --show-sdk-path)"
 # 先用桩组件验证分支、完整性阻断和报告脱敏；不链接或执行真实安全 SDK。
 xcrun --sdk macosx clang -fobjc-arc -fblocks -Wno-incomplete-implementation \
   -isysroot "$(xcrun --sdk macosx --show-sdk-path)" -F "$frameworks" \
-  -I iosApp/iosApp -DCAMPUS_COMPONENT_PROBE=1 \
+  -I iosApp/iosApp -DCAMPUS_COMPONENT_PROBE=1 -DCAMPUS_COMPONENT_CAPTURE_SDK_ERRORS=1 \
   tools/ios-component-probe/ProbeTests.m iosApp/iosApp/CampusComponentProbe.m \
   -framework Foundation -o "$output/probe-tests"
 "$output/probe-tests"
 
 xcrun --sdk iphoneos clang -fobjc-arc -fblocks -target arm64-apple-ios16.0 \
-  -isysroot "$sdk_path" -F "$frameworks" -DCAMPUS_COMPONENT_PROBE=1 \
+  -isysroot "$sdk_path" -F "$frameworks" -DCAMPUS_COMPONENT_PROBE=1 -DCAMPUS_COMPONENT_CAPTURE_SDK_ERRORS=1 \
   -c iosApp/iosApp/CampusComponentProbe.m -o "$output/CampusComponentProbe.o"
 
 xcrun --sdk iphoneos swiftc -swift-version 5 -parse-as-library -O \

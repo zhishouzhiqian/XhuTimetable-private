@@ -21,6 +21,19 @@ static void Check(BOOL condition, NSString *message);
 @implementation ProbeStore
 - (NSString *)getAppKey:(NSNumber *)index authCode:(NSString *)code {
     Check(code == nil, @"静态配置应使用默认 authCode，不能用空字符串替代");
+    if (scenario == 7) NSLog(@"%@", @"SG ERROR: 202\n, private-sdk-explanation");
+    if (scenario == 8) NSLog(@"SG ERROR: %d\n", 203);
+    if (scenario == 9) {
+        NSLog(@"SG ERROR: 202private-value");
+        NSLog(@"SG ERROR: 123456\n");
+        dispatch_semaphore_t logged = dispatch_semaphore_create(0);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            NSLog(@"SG ERROR: 202\n");
+            dispatch_semaphore_signal(logged);
+        });
+        Check(dispatch_semaphore_wait(logged, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) == 0,
+            @"其他线程日志测试应完成");
+    }
     return nil;
 }
 @end
@@ -122,7 +135,8 @@ static void RunCase(int number) {
     if (number == 2) [@"changed" writeToFile:[folder stringByAppendingPathComponent:@"yw_1222.jpg"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
     if (number == 3) [@"mock" writeToFile:[folder stringByAppendingPathComponent:@"yw_1222.jpg"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
     __block NSUInteger progressCount = 0;
-    [CampusComponentProbe runAtResourcePath:folder appKeyHint:number == 0 ? nil : @"mock-input-key"
+    NSLog(@"SG ERROR: 999\n"); // 作用域外的日志不得污染下一次结果。
+    [CampusComponentProbe runAtResourcePath:folder appKeyHint:number == 0 || number >= 7 ? nil : @"mock-input-key"
         progress:^(NSArray *rows) { progressCount++; }
         completion:^(NSArray *rows) {
             // 集合 description 是调试表示，可能将中文转义为 Unicode；断言直接读取报告字段。
@@ -161,8 +175,15 @@ static void RunCase(int number) {
                 Check(signCalls == 2, @"固定签名场景应完成两次离线调用");
                 CheckReportResult(rows, @"两次签名比较", @"相同，需继续分析");
             }
+            if (number == 7 || number == 8) {
+                CheckReportResult(rows, @"AppKey 底层错误", number == 7 ? @"SG ERROR: 202" : @"SG ERROR: 203");
+                Check((ReportResult(rows, @"AppKey 错误解释") != nil) == (number == 7), @"仅已核对的 202 分支可解释为应用绑定不匹配");
+                Check(signCalls == 0, @"底层诊断不能替代 AppKey 或触发签名");
+            } else if (number != 2) {
+                CheckReportResult(rows, @"AppKey 底层错误", @"未捕获同步数字错误码；不能据此判定底层成功");
+            }
             completedTests++;
-            if (number < 6) RunCase(number + 1);
+            if (number < 9) RunCase(number + 1);
             else { [[NSFileManager defaultManager] removeItemAtPath:folder error:nil]; printf("%d 项原生检查流程测试通过。\n", completedTests); exit(0); }
         }];
 }

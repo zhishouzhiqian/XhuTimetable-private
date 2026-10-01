@@ -99,3 +99,13 @@ python tools/audit_campus_ios_signing.py --ipa <本地破壳IPA> --output build/
 当前可用的官方百川下载页仍提供 [iOS 旗舰版 5.0.0.18](https://developer.alibaba.com/docs/doc.htm?articleId=106383&docType=1&treeId=129)，本轮未找到校园 `6.8.260603` 的可链接发行包。[官方 iOS 安全组件集成说明](https://developer.alibaba.com/docs/doc.htm?articleId=105603&docType=1&treeId=243) 将 framework 与安全资源作为独立集成材料；这不证明校园必须申请新的资源，也不能把完整 `MH_EXECUTE` 主程序直接作为 framework 链接。
 
 后续进度取决于能验证 SDK 资源加载失败原因的证据，或能在本应用环境读取配置并初始化统一签名的可链接 iOS 组件。优先核对厂商组件发行版本、插件组合及资源加载契约；取得新的可验证材料后再设计一次具有区分能力的检查。当前没有兼容组件、可用新签名或真实校园网关，不开放 iOS 登录、订单创建和付款。本轮只有报告提示与文档调整，不要求用户再次构建；原生改动留待下一次有实际组件变更时一并编译验证。
+
+## 继续定位：获取 AppKey 失败时被遗漏的数字错误
+
+进一步核对校园主程序：内部 `SecurityGuardStaticDataStore.getAppKey:` 最终委托 Open 管理器与 `getAppKey:authCode:`，认证参数为 nil。因此，检查宿主没有内部管理器类本身不足以解释失败。候选 SGMain 的初始化包装也会归一化空认证参数；真机结果与此相符。项目的 `tmall-campus-sms-protocol.md` 已记录普通 H5 登录无法完成校园 App 会话转换，不能将 H5 重定向当作已验证替代方案。
+
+候选 SGMain 的 `getAppKey:authCode:` 在底层失败后计算 `原始错误 + 200`，通过 `NSLog` 输出 `SG ERROR: %d\n`。其原始错误 2 的分支追加固定诊断：应用 Bundle ID 与 SecurityGuardSDK 的 yw_1222 图片不匹配。因此 **该候选版本的 SG ERROR 202** 有静态代码依据；这不是对 MiddleTier 2404 的解释，也不是已在用户设备观察到 202。分析仅还原这些 SDK 日志格式常量，未解密导入的安全图片。
+
+轻量构建新增独立宏 `CAMPUS_COMPONENT_CAPTURE_SDK_ERRORS`：宿主观察静态库的 NSLog 调用，继续通过 Foundation 的 NSLogv 输出原有日志；只在当前线程同步读取 AppKey 的期间解析严格的数字错误格式，报告仅保留数字，不保存或展示日志正文。结束或抛出异常都关闭观察，其他线程、前后调用和格式不符的日志不作为诊断依据。完整课表构建不启用此宏。未捕获日志不代表 SDK 成功；异步日志或其他日志通道也可能无法观察。
+
+增加原生桩场景验证 202、203、错误格式、其他线程、前次结果清空与报告脱敏。Windows 无 Foundation/Xcode，尚不能执行这些原生测试；`ios-component-check` 在编译 IPA 前执行全部 10 个场景。下一次真机报告重点是“AppKey 底层错误”：若为 202，应取得匹配本应用身份的授权资源与兼容 SDK，不能靠手填 AppKey 或改路径修复绑定；其他数字需继续对照对应分支。此次是补足有区分能力的诊断，并非已经修复 2404 或打通 iOS 洗衣。

@@ -3,6 +3,44 @@
 #import "CampusMtopProbeInput.h"
 #include <math.h>
 #include <stdlib.h>
+#include <stdarg.h>
+
+#if CAMPUS_COMPONENT_PROBE && CAMPUS_COMPONENT_CAPTURE_SDK_ERRORS
+// 仅轻量诊断宿主链接此观察器。SDK 静态库的 NSLog 引用由宿主解析，
+// 仍用 Foundation 的 NSLogv 输出原日志；报告只保留同步 AppKey 调用中的数字码。
+static _Thread_local BOOL ProbeReadingAppKey;
+static _Thread_local NSInteger ProbeAppKeyError;
+void NSLog(NSString *format, ...) {
+    va_list args;
+    va_start(args, format);
+    @try {
+        if (ProbeReadingAppKey && ProbeAppKeyError == 0) {
+            va_list copy;
+            va_copy(copy, args);
+            NSString *message;
+            @try { message = [[NSString alloc] initWithFormat:format arguments:copy]; }
+            @finally { va_end(copy); }
+            NSString *prefix = @"SG ERROR: ";
+            if ([message hasPrefix:prefix]) {
+                NSUInteger cursor = prefix.length, digits = 0;
+                NSInteger code = 0;
+                while (cursor < message.length && digits < 6) {
+                    unichar c = [message characterAtIndex:cursor];
+                    if (c < '0' || c > '9') break;
+                    code = code * 10 + c - '0';
+                    cursor++; digits++;
+                }
+                // 厂商格式在数字后换行；不接受数字与其他字段拼接的文本。
+                if (digits > 0 && digits <= 5 && code > 0 &&
+                    (cursor == message.length || [message characterAtIndex:cursor] == '\n')) {
+                    ProbeAppKeyError = code;
+                }
+            }
+        }
+        NSLogv(format, args);
+    } @finally { va_end(args); }
+}
+#endif
 
 #if CAMPUS_COMPONENT_PROBE
 #import <SecurityGuardSDK/Open/OpenSecurityGuardManager.h>
@@ -99,7 +137,20 @@ static NSString *ProbeDigest(NSData *data) {
                             emit(@"静态配置协议接口", store ? @"可获取" : @"未返回组件");
                         }
                         if (store) {
+#if CAMPUS_COMPONENT_CAPTURE_SDK_ERRORS
+                            ProbeAppKeyError = 0;
+                            ProbeReadingAppKey = YES;
+                            @try { appKey = [store getAppKey:@0 authCode:nil]; }
+                            @finally { ProbeReadingAppKey = NO; }
+                            emit(@"AppKey 底层错误", ProbeAppKeyError > 0 ?
+                                [NSString stringWithFormat:@"SG ERROR: %ld", (long)ProbeAppKeyError] :
+                                @"未捕获同步数字错误码；不能据此判定底层成功");
+                            if (ProbeAppKeyError == 202) {
+                                emit(@"AppKey 错误解释", @"当前候选 SDK 的 202 分支指向应用 Bundle ID 与安全图片不匹配；需匹配本应用的授权资源");
+                            }
+#else
                             appKey = [store getAppKey:@0 authCode:nil];
+#endif
                             emit(@"读取 AppKey（索引 0）", appKey.length > 0 ? @"成功（值不展示）" :
                                 @"返回空值；此接口不提供 NSError，原因尚不确定");
                         }
