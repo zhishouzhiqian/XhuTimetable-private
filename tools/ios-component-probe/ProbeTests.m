@@ -23,6 +23,7 @@ static void Check(BOOL condition, NSString *message);
     Check(code == nil, @"静态配置应使用默认 authCode，不能用空字符串替代");
     if (scenario == 7) NSLog(@"%@", @"SG ERROR: 202\n, private-sdk-explanation");
     if (scenario == 8) NSLog(@"SG ERROR: %d\n", 203);
+    if (scenario == 10) NSLog(@"%@", @"SG ERROR: 204\n");
     if (scenario == 9) {
         NSLog(@"SG ERROR: 202private-value");
         NSLog(@"SG ERROR: 123456\n");
@@ -179,11 +180,15 @@ static void RunCase(int number) {
                 CheckReportResult(rows, @"AppKey 底层错误", number == 7 ? @"SG ERROR: 202" : @"SG ERROR: 203");
                 Check((ReportResult(rows, @"AppKey 错误解释") != nil) == (number == 7), @"仅已核对的 202 分支可解释为应用绑定不匹配");
                 Check(signCalls == 0, @"底层诊断不能替代 AppKey 或触发签名");
+            } else if (number == 10) {
+                CheckReportResult(rows, @"AppKey 底层错误", @"SG ERROR: 204");
+                CheckReportResult(rows, @"AppKey 错误解释", @"SDK 报告安全图片格式不正确；需核对 SDK 与资源的类别及版本兼容性，不能据此判定 Bundle ID 不匹配");
+                Check(signCalls == 0, @"格式错误诊断不能触发签名");
             } else if (number != 2) {
                 CheckReportResult(rows, @"AppKey 底层错误", @"未捕获同步数字错误码；不能据此判定底层成功");
             }
             completedTests++;
-            if (number < 9) RunCase(number + 1);
+            if (number < 10) RunCase(number + 1);
             else { [[NSFileManager defaultManager] removeItemAtPath:folder error:nil]; printf("%d 项原生检查流程测试通过。\n", completedTests); exit(0); }
         }];
 }

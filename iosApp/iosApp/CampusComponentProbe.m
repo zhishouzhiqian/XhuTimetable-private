@@ -147,6 +147,9 @@ static NSString *ProbeDigest(NSData *data) {
                                 @"未捕获同步数字错误码；不能据此判定底层成功");
                             if (ProbeAppKeyError == 202) {
                                 emit(@"AppKey 错误解释", @"当前候选 SDK 的 202 分支指向应用 Bundle ID 与安全图片不匹配；需匹配本应用的授权资源");
+                            } else if (ProbeAppKeyError == 204) {
+                                // 厂商静态存储错误表：SEC_ERROR_STA_STORE_INCORRECT_DATA_FILE。
+                                emit(@"AppKey 错误解释", @"SDK 报告安全图片格式不正确；需核对 SDK 与资源的类别及版本兼容性，不能据此判定 Bundle ID 不匹配");
                             }
 #else
                             appKey = [store getAppKey:@0 authCode:nil];
