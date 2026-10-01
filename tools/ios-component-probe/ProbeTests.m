@@ -9,7 +9,10 @@
 #import "CampusMtopProbeInput.h"
 #import "ProbeResourceTrace.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
+#include <unistd.h>
+#include <sys/stat.h>
 
 static int managerCalls, initCalls, signCalls, completedTests;
 static BOOL failInitialization;
@@ -28,6 +31,16 @@ static void Check(BOOL condition, NSString *message);
         FILE *resource = fopen([folder stringByAppendingPathComponent:@"yw_1222.jpg"].fileSystemRepresentation, "rb");
         Check(resource != NULL, @"桩 SDK 应能打开导入文件");
         fclose(resource);
+    }
+    if (scenario == 12) {
+        dispatch_semaphore_t opened = dispatch_semaphore_create(0);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+            int fd = open([folder stringByAppendingPathComponent:@"yw_1222.jpg"].fileSystemRepresentation, O_RDONLY);
+            Check(fd >= 0, @"SDK 工作线程应能打开导入文件"); close(fd);
+            dispatch_semaphore_signal(opened);
+        });
+        Check(dispatch_semaphore_wait(opened, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) == 0,
+            @"SDK 工作线程应完成读取");
     }
     if (scenario == 7) NSLog(@"%@", @"SG ERROR: 202\n, private-sdk-explanation");
     if (scenario == 8) NSLog(@"SG ERROR: %d\n", 203);
@@ -122,6 +135,10 @@ static void CheckResourceTrace(void) {
     int baselineError = errno;
     Check(baseline != NULL, @"基线文件应能打开");
     fclose(baseline);
+    errno = EDOM;
+    int baselineFd = open(original.fileSystemRepresentation, O_RDONLY);
+    int baselineOpenError = errno;
+    Check(baselineFd >= 0, @"open 基线应成功"); close(baselineFd);
     Check(CampusProbeResourceTraceBegin(folder), @"原文件访问函数与参考资源应可用");
     errno = EDOM;
     FILE *stream = fopen(original.fileSystemRepresentation, "rb");
@@ -143,10 +160,25 @@ static void CheckResourceTrace(void) {
         dispatch_semaphore_signal(done);
     });
     Check(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) == 0, @"跨线程文件测试应完成");
+    errno = EDOM;
+    int fd = open(original.fileSystemRepresentation, O_RDONLY);
+    int observedOpenError = errno;
+    char first;
+    Check(fd >= 0 && observedOpenError == baselineOpenError && lseek(fd, 0, SEEK_CUR) == 0 &&
+        read(fd, &first, 1) == 1 && first == 'm', @"open 观察不得改变 errno 或文件位置");
+    close(fd);
+    Check(open(missing.fileSystemRepresentation, O_RDONLY) == -1 && errno == ENOENT, @"open 应保留失败 errno");
+    NSString *created = [folder stringByAppendingPathComponent:@"created.dat"];
+    fd = open(created.fileSystemRepresentation, O_CREAT | O_EXCL | O_WRONLY, 0600);
+    struct stat createdInfo;
+    Check(fd >= 0 && fstat(fd, &createdInfo) == 0 && (createdInfo.st_mode & 0077) == 0,
+        @"open 必须正确转发 O_CREAT 的权限参数");
+    Check(write(fd, "x", 1) == 1, @"非目标写入行为不应受影响"); close(fd);
     NSArray *rows = CampusProbeResourceTraceEnd();
-    Check(rows.count == 2, @"报告只允许两个目标资源");
+    Check(rows.count == 4, @"报告只允许两个目标资源的访问与入口统计");
     CheckReportResult(rows, @"SDK 文件访问：yw_1222.jpg", [NSString stringWithFormat:
-        @"打开尝试 3，成功 2；同一导入文件 1；内容一致 1，不同 1，无法校验 0；最近打开失败 errno %d", ENOENT]);
+        @"打开尝试 6，成功 4；同一导入文件 3；内容一致 3，不同 1，无法校验 0；最近打开失败 errno %d", ENOENT]);
+    CheckReportResult(rows, @"SDK 文件入口：yw_1222.jpg", @"fopen 4，open 2；包含工作线程，不包含自检");
     CheckReportResult(rows, @"SDK 文件访问：yw_1222_mwua.jpg",
         @"打开尝试 1，成功 1；同一导入文件 1；内容一致 1，不同 0，无法校验 0；最近打开失败 errno 0");
     for (NSDictionary *row in rows) {
@@ -155,10 +187,10 @@ static void CheckResourceTrace(void) {
     Check(CampusProbeResourceTraceEnd().count == 0, @"结束后不能返回上一次结果");
     Check(CampusProbeResourceTraceBegin(folder), @"新的观察应能开始");
     CheckReportResult(CampusProbeResourceTraceEnd(), @"SDK 文件访问：yw_1222.jpg",
-        @"未观察到同步 fopen；不能据此判定 SDK 未读取文件");
+        @"窗口内未观察到 fopen/open；不能据此判定 SDK 未读取文件");
     Check(!CampusProbeResourceTraceBegin([folder stringByAppendingPathComponent:@"missing"]), @"参考文件缺失应停止观察");
     Check(CampusProbeResourceTraceEnd().count == 0, @"准备失败不得留下活动观察");
-    puts("文件访问跟踪：身份、摘要、位置、errno、线程隔离和重置测试通过。");
+    puts("文件访问跟踪：身份、摘要、位置、errno、跨线程汇总、open 权限转发及自检清零测试通过。");
 }
 static void CheckInputContract(void) {
     NSData *body = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
@@ -234,11 +266,13 @@ static void RunCase(int number) {
                 Check(signCalls == 2, @"固定签名场景应完成两次离线调用");
                 CheckReportResult(rows, @"两次签名比较", @"相同，需继续分析");
             }
-            if (number == 11) {
+            if (number == 11 || number == 12) {
                 CheckReportResult(rows, @"SDK 文件访问：yw_1222.jpg",
                     @"打开尝试 1，成功 1；同一导入文件 1；内容一致 1，不同 0，无法校验 0；最近打开失败 errno 0");
+                CheckReportResult(rows, @"SDK 文件入口：yw_1222.jpg", number == 11 ?
+                    @"fopen 1，open 0；包含工作线程，不包含自检" : @"fopen 0，open 1；包含工作线程，不包含自检");
             } else if (number != 2) {
-                CheckReportResult(rows, @"SDK 文件访问：yw_1222.jpg", @"未观察到同步 fopen；不能据此判定 SDK 未读取文件");
+                CheckReportResult(rows, @"SDK 文件访问：yw_1222.jpg", @"窗口内未观察到 fopen/open；不能据此判定 SDK 未读取文件");
             }
             if (number == 7 || number == 8) {
                 CheckReportResult(rows, @"AppKey 底层错误", number == 7 ? @"SG ERROR: 202" : @"SG ERROR: 203");
@@ -252,7 +286,7 @@ static void RunCase(int number) {
                 CheckReportResult(rows, @"AppKey 底层错误", @"未捕获同步数字错误码；不能据此判定底层成功");
             }
             completedTests++;
-            if (number < 11) RunCase(number + 1);
+            if (number < 12) RunCase(number + 1);
             else { [[NSFileManager defaultManager] removeItemAtPath:folder error:nil]; printf("%d 项原生检查流程测试通过。\n", completedTests); exit(0); }
         }];
 }

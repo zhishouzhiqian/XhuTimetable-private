@@ -108,7 +108,7 @@ static NSString *ProbeDigest(NSData *data) {
 #if CAMPUS_COMPONENT_PROBE
 #if CAMPUS_COMPONENT_TRACE_FILES
                 emit(@"SDK 文件跟踪", CampusProbeResourceTraceBegin(path) ?
-                    @"已启用：仅当前线程的 fopen；不展示路径和文件内容" : @"无法启用；本次不能核实 SDK 文件访问");
+                    @"已启用：fopen/open 运行时入口自检通过，覆盖检查窗口内各线程；不展示路径和内容" : @"入口自检或参考资源准备失败；本次不能核实 SDK 文件访问");
 #endif
                 for (NSString *name in @[@"MainPlugin", @"MiddleTierPlugin", @"SecurityBodyPlugin"]) {
                     emit(name, NSClassFromString(name) ? @"已链接" : @"未找到组件类");
