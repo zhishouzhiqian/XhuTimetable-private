@@ -7,6 +7,9 @@
 #import <SGMiddleTier/ISecurityGuardOpenUnifiedSecurity.h>
 #import "CampusComponentProbe.h"
 #import "CampusMtopProbeInput.h"
+#import "ProbeResourceTrace.h"
+#include <errno.h>
+#include <stdio.h>
 
 static int managerCalls, initCalls, signCalls, completedTests;
 static BOOL failInitialization;
@@ -21,6 +24,11 @@ static void Check(BOOL condition, NSString *message);
 @implementation ProbeStore
 - (NSString *)getAppKey:(NSNumber *)index authCode:(NSString *)code {
     Check(code == nil, @"静态配置应使用默认 authCode，不能用空字符串替代");
+    if (scenario == 11) {
+        FILE *resource = fopen([folder stringByAppendingPathComponent:@"yw_1222.jpg"].fileSystemRepresentation, "rb");
+        Check(resource != NULL, @"桩 SDK 应能打开导入文件");
+        fclose(resource);
+    }
     if (scenario == 7) NSLog(@"%@", @"SG ERROR: 202\n, private-sdk-explanation");
     if (scenario == 8) NSLog(@"SG ERROR: %d\n", 203);
     if (scenario == 10) NSLog(@"%@", @"SG ERROR: 204\n");
@@ -102,6 +110,56 @@ static void CheckReportResult(NSArray *rows, NSString *step, NSString *expected)
     Check([ReportResult(rows, step) isEqualToString:expected],
         [NSString stringWithFormat:@"阶段“%@”应返回“%@”", step, expected]);
 }
+static void CheckResourceTrace(void) {
+    NSString *original = [folder stringByAppendingPathComponent:@"yw_1222.jpg"];
+    NSString *otherDirectory = [folder stringByAppendingPathComponent:@"other"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:otherDirectory withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *other = [otherDirectory stringByAppendingPathComponent:@"yw_1222.jpg"];
+    [@"private-different-file" writeToFile:other atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    NSString *missing = [folder stringByAppendingPathComponent:@"missing/yw_1222.jpg"];
+    errno = EDOM;
+    FILE *baseline = fopen(original.fileSystemRepresentation, "rb");
+    int baselineError = errno;
+    Check(baseline != NULL, @"基线文件应能打开");
+    fclose(baseline);
+    Check(CampusProbeResourceTraceBegin(folder), @"原文件访问函数与参考资源应可用");
+    errno = EDOM;
+    FILE *stream = fopen(original.fileSystemRepresentation, "rb");
+    int observedError = errno;
+    Check(stream != NULL && observedError == baselineError, @"观察器不能改变 fopen 返回值或 errno");
+    Check(ftell(stream) == 0 && fgetc(stream) == 'm', @"摘要读取不能改变调用者的文件位置");
+    fclose(stream);
+    stream = fopen(other.fileSystemRepresentation, "rb");
+    Check(stream != NULL, @"其他位置的同名文件应可打开"); fclose(stream);
+    Check(fopen(missing.fileSystemRepresentation, "rb") == NULL && errno == ENOENT, @"打开失败应保留真实 errno");
+    stream = fopen([folder stringByAppendingPathComponent:@"yw_1222_mwua.jpg"].fileSystemRepresentation, "rb");
+    Check(stream != NULL, @"第二资源应可独立跟踪"); fclose(stream);
+    stream = fopen([folder stringByAppendingPathComponent:@"Info.plist"].fileSystemRepresentation, "rb");
+    Check(stream != NULL, @"普通文件不受影响"); fclose(stream);
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        FILE *background = fopen(original.fileSystemRepresentation, "rb");
+        Check(background != NULL, @"其他线程应正常读文件"); fclose(background);
+        dispatch_semaphore_signal(done);
+    });
+    Check(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) == 0, @"跨线程文件测试应完成");
+    NSArray *rows = CampusProbeResourceTraceEnd();
+    Check(rows.count == 2, @"报告只允许两个目标资源");
+    CheckReportResult(rows, @"SDK 文件访问：yw_1222.jpg", [NSString stringWithFormat:
+        @"打开尝试 3，成功 2；同一导入文件 1；内容一致 1，不同 1，无法校验 0；最近打开失败 errno %d", ENOENT]);
+    CheckReportResult(rows, @"SDK 文件访问：yw_1222_mwua.jpg",
+        @"打开尝试 1，成功 1；同一导入文件 1；内容一致 1，不同 0，无法校验 0；最近打开失败 errno 0");
+    for (NSDictionary *row in rows) {
+        Check(![row[@"result"] containsString:folder] && ![row[@"result"] containsString:@"private-"], @"文件跟踪不得泄露路径或内容");
+    }
+    Check(CampusProbeResourceTraceEnd().count == 0, @"结束后不能返回上一次结果");
+    Check(CampusProbeResourceTraceBegin(folder), @"新的观察应能开始");
+    CheckReportResult(CampusProbeResourceTraceEnd(), @"SDK 文件访问：yw_1222.jpg",
+        @"未观察到同步 fopen；不能据此判定 SDK 未读取文件");
+    Check(!CampusProbeResourceTraceBegin([folder stringByAppendingPathComponent:@"missing"]), @"参考文件缺失应停止观察");
+    Check(CampusProbeResourceTraceEnd().count == 0, @"准备失败不得留下活动观察");
+    puts("文件访问跟踪：身份、摘要、位置、errno、线程隔离和重置测试通过。");
+}
 static void CheckInputContract(void) {
     NSData *body = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *headers = @{@"x-t": @"1700000000", @"x-uid": @"sample-uid", @"x-reqbiz-ext": @"sample-biz",
@@ -176,6 +234,12 @@ static void RunCase(int number) {
                 Check(signCalls == 2, @"固定签名场景应完成两次离线调用");
                 CheckReportResult(rows, @"两次签名比较", @"相同，需继续分析");
             }
+            if (number == 11) {
+                CheckReportResult(rows, @"SDK 文件访问：yw_1222.jpg",
+                    @"打开尝试 1，成功 1；同一导入文件 1；内容一致 1，不同 0，无法校验 0；最近打开失败 errno 0");
+            } else if (number != 2) {
+                CheckReportResult(rows, @"SDK 文件访问：yw_1222.jpg", @"未观察到同步 fopen；不能据此判定 SDK 未读取文件");
+            }
             if (number == 7 || number == 8) {
                 CheckReportResult(rows, @"AppKey 底层错误", number == 7 ? @"SG ERROR: 202" : @"SG ERROR: 203");
                 Check((ReportResult(rows, @"AppKey 错误解释") != nil) == (number == 7), @"仅已核对的 202 分支可解释为应用绑定不匹配");
@@ -188,7 +252,7 @@ static void RunCase(int number) {
                 CheckReportResult(rows, @"AppKey 底层错误", @"未捕获同步数字错误码；不能据此判定底层成功");
             }
             completedTests++;
-            if (number < 10) RunCase(number + 1);
+            if (number < 11) RunCase(number + 1);
             else { [[NSFileManager defaultManager] removeItemAtPath:folder error:nil]; printf("%d 项原生检查流程测试通过。\n", completedTests); exit(0); }
         }];
 }
@@ -210,6 +274,7 @@ int main(void) {
             [data writeToFile:[folder stringByAppendingPathComponent:name] atomically:YES]; manifest[name] = hash;
         }
         [manifest writeToFile:[folder stringByAppendingPathComponent:@"probe-manifest.plist"] atomically:YES];
+        CheckResourceTrace();
         dispatch_async(dispatch_get_main_queue(), ^{ RunCase(0); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ Check(NO, @"原生测试超时"); });
         dispatch_main();

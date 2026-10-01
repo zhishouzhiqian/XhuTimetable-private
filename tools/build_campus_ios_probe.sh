@@ -12,20 +12,26 @@ sdk_path="$(xcrun --sdk iphoneos --show-sdk-path)"
 # 先用桩组件验证分支、完整性阻断和报告脱敏；不链接或执行真实安全 SDK。
 xcrun --sdk macosx clang -fobjc-arc -fblocks -Wno-incomplete-implementation \
   -isysroot "$(xcrun --sdk macosx --show-sdk-path)" -F "$frameworks" \
-  -I iosApp/iosApp -DCAMPUS_COMPONENT_PROBE=1 -DCAMPUS_COMPONENT_CAPTURE_SDK_ERRORS=1 \
+  -I iosApp/iosApp -I tools/ios-component-probe -DCAMPUS_COMPONENT_PROBE=1 \
+  -DCAMPUS_COMPONENT_CAPTURE_SDK_ERRORS=1 -DCAMPUS_COMPONENT_TRACE_FILES=1 \
   tools/ios-component-probe/ProbeTests.m iosApp/iosApp/CampusComponentProbe.m \
+  tools/ios-component-probe/ProbeResourceTrace.m \
   -framework Foundation -o "$output/probe-tests"
 "$output/probe-tests"
 
 xcrun --sdk iphoneos clang -fobjc-arc -fblocks -target arm64-apple-ios16.0 \
   -isysroot "$sdk_path" -F "$frameworks" -DCAMPUS_COMPONENT_PROBE=1 -DCAMPUS_COMPONENT_CAPTURE_SDK_ERRORS=1 \
+  -I tools/ios-component-probe -DCAMPUS_COMPONENT_TRACE_FILES=1 \
   -c iosApp/iosApp/CampusComponentProbe.m -o "$output/CampusComponentProbe.o"
+
+xcrun --sdk iphoneos clang -fobjc-arc -fblocks -target arm64-apple-ios16.0 \
+  -isysroot "$sdk_path" -c tools/ios-component-probe/ProbeResourceTrace.m -o "$output/ProbeResourceTrace.o"
 
 xcrun --sdk iphoneos swiftc -swift-version 5 -parse-as-library -O \
   -target arm64-apple-ios16.0 -sdk "$sdk_path" -module-name CampusComponentCheck \
   -import-objc-header iosApp/iosApp/CampusComponentProbe.h \
   iosApp/iosApp/LaundryComponentCheckViewController.swift \
-  tools/ios-component-probe/ProbeAppDelegate.swift "$output/CampusComponentProbe.o" \
+  tools/ios-component-probe/ProbeAppDelegate.swift "$output/CampusComponentProbe.o" "$output/ProbeResourceTrace.o" \
   -F "$frameworks" -Xlinker -ObjC \
   -framework UIKit -framework Foundation -framework UniformTypeIdentifiers \
   -framework CryptoKit -framework SecurityGuardSDK -framework SGMain \

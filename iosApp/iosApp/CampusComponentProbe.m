@@ -4,6 +4,9 @@
 #include <math.h>
 #include <stdlib.h>
 #include <stdarg.h>
+#if CAMPUS_COMPONENT_TRACE_FILES
+#import "ProbeResourceTrace.h"
+#endif
 
 #if CAMPUS_COMPONENT_PROBE && CAMPUS_COMPONENT_CAPTURE_SDK_ERRORS
 // 仅轻量诊断宿主链接此观察器。SDK 静态库的 NSLog 引用由宿主解析，
@@ -103,6 +106,10 @@ static NSString *ProbeDigest(NSData *data) {
             }
             if (resourcesValid) {
 #if CAMPUS_COMPONENT_PROBE
+#if CAMPUS_COMPONENT_TRACE_FILES
+                emit(@"SDK 文件跟踪", CampusProbeResourceTraceBegin(path) ?
+                    @"已启用：仅当前线程的 fopen；不展示路径和文件内容" : @"无法启用；本次不能核实 SDK 文件访问");
+#endif
                 for (NSString *name in @[@"MainPlugin", @"MiddleTierPlugin", @"SecurityBodyPlugin"]) {
                     emit(name, NSClassFromString(name) ? @"已链接" : @"未找到组件类");
                 }
@@ -243,6 +250,11 @@ static NSString *ProbeDigest(NSData *data) {
 #endif
             }
         } @catch (NSException *exception) { emit(stage, @"发生异常（正文已隐藏）"); }
+        @finally {
+#if CAMPUS_COMPONENT_TRACE_FILES
+            for (NSDictionary *row in CampusProbeResourceTraceEnd()) emit(row[@"step"], row[@"result"]);
+#endif
+        }
         emit(@"服务端签名及设备注册", @"尚未验证");
         NSArray *snapshot = [rows copy];
         dispatch_async(dispatch_get_main_queue(), ^{ active = NO; completion(snapshot); });
