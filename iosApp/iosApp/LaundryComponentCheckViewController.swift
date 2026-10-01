@@ -201,7 +201,9 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
     private static func updateReport(_ rows: [[String: String]], completed: Bool) {
         let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "未知"
         let bundleID = Bundle.main.bundleIdentifier ?? "未知"
+        let revision = Bundle.main.object(forInfoDictionaryKey: "CampusProbeRevision") as? String
         lastResult = "检查版本：\(version)\n应用：\(bundleID)\n\n"
+            + (revision.map { "检查修订：\($0)\n\n" } ?? "")
             + rows.map { "\($0["step"] ?? "检查")：\($0["result"] ?? "未知")" }.joined(separator: "\n\n")
             + (completed ? "\n\n如需再次检查，请彻底关闭应用后重新打开。" : "")
         NotificationCenter.default.post(name: reportChanged, object: nil)

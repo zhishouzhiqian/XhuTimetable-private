@@ -10,6 +10,7 @@
 static int managerCalls, initCalls, signCalls, completedTests;
 static BOOL failInitialization;
 static NSString *folder;
+static BOOL unifiedPathMatched;
 
 @interface ProbeStore : NSObject
 @end
@@ -21,6 +22,8 @@ static NSString *folder;
 @implementation ProbeUnified
 - (BOOL)init:(NSDictionary *)params error:(NSError **)error {
     initCalls++;
+    unifiedPathMatched = [params[@"customBundelPath"] isEqualToString:folder] &&
+        params[@"customBundlePath"] == nil;
     if (failInitialization) { *error = [NSError errorWithDomain:@"Mock" code:445 userInfo:nil]; return NO; }
     return YES;
 }
@@ -55,6 +58,7 @@ static void Check(BOOL condition, NSString *message) {
 }
 static void RunCase(int number) {
     managerCalls = initCalls = signCalls = 0;
+    unifiedPathMatched = NO;
     failInitialization = number == 3;
     if (number == 2) [@"changed" writeToFile:[folder stringByAppendingPathComponent:@"yw_1222.jpg"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
     if (number == 3) [@"mock" writeToFile:[folder stringByAppendingPathComponent:@"yw_1222.jpg"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
@@ -65,9 +69,11 @@ static void RunCase(int number) {
             NSString *report = rows.description;
             Check(progressCount > 0, @"应提供阶段进度");
             Check(![report containsString:@"private-"] && ![report containsString:@"mock-input-key"], @"报告不得包含安全字段或输入值");
+            Check(![report containsString:folder], @"报告不得包含资源沙盒路径");
             if (number == 0) Check(initCalls == 1 && signCalls == 0, @"AppKey 为空仍应检查统一签名初始化");
             if (number == 1) Check(initCalls == 1 && signCalls == 2, @"提供 AppKey 时应使用两个新输入生成签名");
             if (number == 2) Check(managerCalls == 0, @"资源完整性失败时不能进入 SDK");
+            else Check(unifiedPathMatched, @"统一签名必须收到已校验资源路径，参数拼写为 customBundelPath");
             if (number == 3) Check(initCalls == 1 && signCalls == 0 && [report containsString:@"445"], @"保留 SDK 错误码并禁止失败后的签名调用");
             completedTests++;
             if (number < 3) RunCase(number + 1);

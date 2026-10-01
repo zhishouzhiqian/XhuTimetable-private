@@ -41,11 +41,13 @@ import subprocess
 
 app = Path('build/ios-component-probe/Payload/CampusComponentCheck.app')
 version = subprocess.check_output(['git', 'rev-list', '--count', 'HEAD'], text=True).strip()
+revision = subprocess.check_output(['git', 'rev-parse', '--short=7', 'HEAD'], text=True).strip()
 info = {
     'CFBundleIdentifier': 'vip.mystery0.xhu.timetable.CampusComponentCheck',
     'CFBundleName': 'CampusComponentCheck', 'CFBundleDisplayName': '洗衣组件检查',
     'CFBundleExecutable': 'CampusComponentCheck', 'CFBundlePackageType': 'APPL',
     'CFBundleVersion': version, 'CFBundleShortVersionString': '1.0',
+    'CampusProbeRevision': revision,
     'CFBundleDevelopmentRegion': 'zh_CN', 'CFBundleSupportedPlatforms': ['iPhoneOS'],
     'MinimumOSVersion': '16.0', 'UIDeviceFamily': [1, 2], 'LSRequiresIPhoneOS': True,
     'UIRequiredDeviceCapabilities': ['arm64'], 'UILaunchScreen': {},

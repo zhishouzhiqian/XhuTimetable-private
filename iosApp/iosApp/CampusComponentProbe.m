@@ -112,7 +112,10 @@ static NSString *ProbeDigest(NSData *data) {
                             stage = @"统一签名初始化";
                             emit(stage, @"正在执行");
                             error = nil;
-                            ready = [unified init:@{@"authCode": @""} error:&error];
+                            // 该版本二进制读取 customBundelPath（Bundel 是厂商参数原名）。
+                            // 两个初始化入口分别显式传入同一目录。
+                            emit(@"统一签名资源路径", @"显式使用已校验的导入目录（路径不展示）");
+                            ready = [unified init:@{@"authCode": @"", @"customBundelPath": path} error:&error];
                             record(stage, ready && error == nil, error);
                             ready = ready && error == nil;
                         }
