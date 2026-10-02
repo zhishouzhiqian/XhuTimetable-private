@@ -2,6 +2,7 @@
 # 只编译 UIKit 检查宿主和候选 SDK；不会运行 Gradle、Kotlin/Native 或课表扩展。
 set -euo pipefail
 cd "$(dirname "$0")/.."
+python3 tools/check_campus_probe_wiring.py
 
 output=build/ios-component-probe
 frameworks=build/campus-ios-probe/frameworks
@@ -16,6 +17,7 @@ xcrun --sdk macosx clang -fobjc-arc -fblocks -Wno-incomplete-implementation \
   -DCAMPUS_COMPONENT_CAPTURE_SDK_ERRORS=1 -DCAMPUS_COMPONENT_TRACE_FILES=1 \
   tools/ios-component-probe/ProbeTests.m iosApp/iosApp/CampusComponentProbe.m \
   tools/ios-component-probe/ProbeResourceTrace.m \
+  tools/ios-component-probe/ProbeContainerSnapshot.m \
   -framework Foundation -o "$output/probe-tests"
 "$output/probe-tests"
 
@@ -27,11 +29,15 @@ xcrun --sdk iphoneos clang -fobjc-arc -fblocks -target arm64-apple-ios16.0 \
 xcrun --sdk iphoneos clang -fobjc-arc -fblocks -target arm64-apple-ios16.0 \
   -isysroot "$sdk_path" -c tools/ios-component-probe/ProbeResourceTrace.m -o "$output/ProbeResourceTrace.o"
 
+xcrun --sdk iphoneos clang -fobjc-arc -fblocks -target arm64-apple-ios16.0 \
+  -isysroot "$sdk_path" -c tools/ios-component-probe/ProbeContainerSnapshot.m -o "$output/ProbeContainerSnapshot.o"
+
 xcrun --sdk iphoneos swiftc -swift-version 5 -parse-as-library -O \
   -target arm64-apple-ios16.0 -sdk "$sdk_path" -module-name CampusComponentCheck \
   -import-objc-header iosApp/iosApp/CampusComponentProbe.h \
   iosApp/iosApp/LaundryComponentCheckViewController.swift \
-  tools/ios-component-probe/ProbeAppDelegate.swift "$output/CampusComponentProbe.o" "$output/ProbeResourceTrace.o" \
+  tools/ios-component-probe/ProbeAppDelegate.swift "$output/CampusComponentProbe.o" \
+  "$output/ProbeResourceTrace.o" "$output/ProbeContainerSnapshot.o" \
   -F "$frameworks" -Xlinker -ObjC \
   -framework UIKit -framework Foundation -framework UniformTypeIdentifiers \
   -framework CryptoKit -framework SecurityGuardSDK -framework SGMain \

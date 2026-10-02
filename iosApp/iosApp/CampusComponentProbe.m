@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #if CAMPUS_COMPONENT_TRACE_FILES
+#import "ProbeContainerSnapshot.h"
 #import "ProbeResourceTrace.h"
 #endif
 
@@ -62,16 +63,150 @@ static NSString *ProbeDigest(NSData *data) {
     return value;
 }
 
+// 诊断对照变体：内容全部从导入资源就地派生，不新增素材，也不改动导入目录。
+// 首轮目标是区分“没有读到目标资源”与“读到后解析拒绝”，所以只改变对照目录的内容。
+static NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeDiagnosticTable(void) {
+    return @[
+        @{@"id": @"baseline", @"title": @"基线：与导入资源一致"},
+        @{@"id": @"main-missing", @"title": @"缺主图 yw_1222.jpg"},
+        @{@"id": @"mwua-missing", @"title": @"缺 yw_1222_mwua.jpg"},
+        @{@"id": @"both-missing", @"title": @"两张图都缺"},
+        @{@"id": @"main-zero", @"title": @"主图同长度全零"},
+        @{@"id": @"main-header-only", @"title": @"主图保留前 16 字节，其余置零"},
+        @{@"id": @"main-truncated", @"title": @"主图截断为一半"},
+        @{@"id": @"main-random", @"title": @"主图同长度随机字节"},
+    ];
+}
+
+static NSString *CampusProbeDiagnosticTitle(NSString *identifier) {
+    for (NSDictionary<NSString *, NSString *> *entry in CampusProbeDiagnosticTable()) {
+        if ([entry[@"id"] isEqualToString:identifier]) return entry[@"title"];
+    }
+    return identifier;
+}
+
+// 从同一份完整导入资源生成对照；缺图是主动控制的变量，不能由来源损坏代替。
+static NSDictionary<NSString *, id> *CampusProbeDiagnosticPrepare(NSString *sourcePath, NSString *variant) {
+    NSString *selected = variant.length ? variant : @"baseline";
+    BOOL known = NO;
+    for (NSDictionary<NSString *, NSString *> *entry in CampusProbeDiagnosticTable()) {
+        if ([entry[@"id"] isEqualToString:selected]) { known = YES; break; }
+    }
+    if (!known) return nil;
+    NSFileManager *manager = [NSFileManager defaultManager];
+    NSArray<NSString *> *names = @[@"yw_1222.jpg", @"yw_1222_mwua.jpg"];
+    NSData *sources[2] = {
+        [NSData dataWithContentsOfFile:[sourcePath stringByAppendingPathComponent:names[0]]],
+        [NSData dataWithContentsOfFile:[sourcePath stringByAppendingPathComponent:names[1]]],
+    };
+    NSData *sourceInfo = [NSData dataWithContentsOfFile:[sourcePath stringByAppendingPathComponent:@"Info.plist"]];
+    NSData *sourceManifest = [NSData dataWithContentsOfFile:[sourcePath stringByAppendingPathComponent:@"probe-manifest.plist"]];
+    id manifest = sourceManifest ? [NSPropertyListSerialization propertyListWithData:sourceManifest
+        options:NSPropertyListImmutable format:nil error:nil] : nil;
+    if (![manifest isKindOfClass:NSDictionary.class] || sourceInfo.length == 0 ||
+        [NSBundle bundleWithPath:sourcePath] == nil) return nil;
+    for (NSUInteger index = 0; index < 2; index++) {
+        id expected = manifest[names[index]];
+        if (sources[index].length == 0 || sources[index].length > 65536 ||
+            ![expected isKindOfClass:NSString.class] || ![ProbeDigest(sources[index]) isEqualToString:expected]) return nil;
+    }
+    NSString *directory = [[NSTemporaryDirectory() stringByAppendingPathComponent:
+        [@"CampusProbeDiagnostic-" stringByAppendingString:NSUUID.UUID.UUIDString]]
+        stringByAppendingPathExtension:@"bundle"];
+    if (![manager createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil]) return nil;
+    if (![sourceInfo writeToFile:[directory stringByAppendingPathComponent:@"Info.plist"] atomically:YES] ||
+        ![sourceManifest writeToFile:[directory stringByAppendingPathComponent:@"probe-manifest.plist"] atomically:YES]) {
+        [manager removeItemAtPath:directory error:nil]; return nil;
+    }
+    NSData *variants[2] = {sources[0], sources[1]};
+    BOOL writes[2] = {YES, YES};
+    NSString *notes[2] = {@"与导入一致", @"与导入一致"};
+    if ([selected isEqualToString:@"main-missing"]) { writes[0] = NO; }
+    else if ([selected isEqualToString:@"mwua-missing"]) { writes[1] = NO; }
+    else if ([selected isEqualToString:@"both-missing"]) { writes[0] = NO; writes[1] = NO; }
+    else if (sources[0].length > 0) {
+        if ([selected isEqualToString:@"main-zero"]) {
+            variants[0] = [NSMutableData dataWithLength:sources[0].length];
+            notes[0] = @"同长度全零";
+        } else if ([selected isEqualToString:@"main-header-only"]) {
+            NSMutableData *value = [NSMutableData dataWithLength:sources[0].length];
+            NSUInteger keep = MIN((NSUInteger)16, sources[0].length);
+            [value replaceBytesInRange:NSMakeRange(0, keep) withBytes:sources[0].bytes];
+            variants[0] = value;
+            notes[0] = [NSString stringWithFormat:@"保留前 %lu 字节，其余置零", (unsigned long)keep];
+        } else if ([selected isEqualToString:@"main-truncated"] && sources[0].length > 1) {
+            variants[0] = [sources[0] subdataWithRange:NSMakeRange(0, sources[0].length / 2)];
+            notes[0] = @"截断为一半";
+        } else if ([selected isEqualToString:@"main-random"]) {
+            NSMutableData *value = [NSMutableData dataWithLength:sources[0].length];
+            arc4random_buf(value.mutableBytes, value.length);
+            variants[0] = value;
+            notes[0] = @"同长度随机字节";
+        }
+    }
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *rows = [NSMutableArray array];
+    [rows addObject:@{@"step": @"诊断对照模式", @"result": [NSString stringWithFormat:
+        @"变体「%@」；不因资源不完整跳过 SDK，直接在对照目录上执行；每个变体必须使用新的应用进程；目录与路径不展示",
+        CampusProbeDiagnosticTitle(selected)]}];
+    for (NSUInteger index = 0; index < 2; index++) {
+        NSString *step = [@"诊断对照资源：" stringByAppendingString:names[index]];
+        if (!writes[index] || variants[index].length == 0) {
+            [rows addObject:@{@"step": step, @"result": sources[index].length == 0 ?
+                @"导入来源缺失，无法派生" : @"未写入对照目录"}];
+            continue;
+        }
+        NSString *target = [directory stringByAppendingPathComponent:names[index]];
+        if (![variants[index] writeToFile:target atomically:YES] ||
+            ![[NSData dataWithContentsOfFile:target] isEqualToData:variants[index]]) {
+            [manager removeItemAtPath:directory error:nil]; return nil;
+        }
+        [rows addObject:@{@"step": step, @"result": [NSString stringWithFormat:@"%@；%lu 字节",
+            notes[index], (unsigned long)variants[index].length]}];
+    }
+    return @{@"directory": directory, @"rows": rows};
+}
+
 @implementation CampusComponentProbe
++ (NSArray<NSDictionary<NSString *, NSString *> *> *)diagnosticVariants {
+    return CampusProbeDiagnosticTable();
+}
+
 + (void)runAtResourcePath:(NSString *)path appKeyHint:(NSString *)appKeyHint
                 progress:(void (^)(NSArray<NSDictionary<NSString *, NSString *> *> *))progress
               completion:(void (^)(NSArray<NSDictionary<NSString *, NSString *> *> *))completion {
+    [self runAtResourcePath:path variant:nil appKeyHint:appKeyHint diagnostics:NO
+                   progress:progress completion:completion];
+}
+
++ (void)runDiagnosticAtResourcePath:(NSString *)path variant:(NSString *)variant
+                           progress:(void (^)(NSArray<NSDictionary<NSString *, NSString *> *> *))progress
+                         completion:(void (^)(NSArray<NSDictionary<NSString *, NSString *> *> *))completion {
+    [self runAtResourcePath:path variant:variant appKeyHint:nil diagnostics:YES
+                   progress:progress completion:completion];
+}
+
++ (void)runAtResourcePath:(NSString *)path variant:(NSString *)variant appKeyHint:(NSString *)appKeyHint
+              diagnostics:(BOOL)diagnostics
+                 progress:(void (^)(NSArray<NSDictionary<NSString *, NSString *> *> *))progress
+               completion:(void (^)(NSArray<NSDictionary<NSString *, NSString *> *> *))completion {
     static BOOL active = NO;
-    // Swift 在主线程调用；SDK 单例不能并发执行或中途更换资源。
+    // 在生成目录之前阻止并发调用，避免拒绝执行却留下临时目录。
     if (active) { completion(@[@{@"step": @"检查任务", @"result": @"正在执行，请稍候"}]); return; }
+    // 诊断模式先在对照目录上派生变体，后续 SDK 步骤全部读取该目录。
+    NSDictionary<NSString *, id> *diagnostic = nil;
+    if (diagnostics) {
+        diagnostic = CampusProbeDiagnosticPrepare(path, variant);
+        if (diagnostic == nil) {
+            completion(@[@{@"step": @"诊断对照模式", @"result": @"来源校验或对照写入失败；未调用 SDK，请重新导入完整检查资源"}]);
+            return;
+        }
+    }
+    NSString *effectivePath = diagnostic[@"directory"] ?: path;
+    NSArray<NSDictionary<NSString *, NSString *> *> *diagnosticRows = diagnostic[@"rows"] ?: @[];
+    // Swift 在主线程调用；SDK 单例不能并发执行或中途更换资源。
     active = YES;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSMutableArray *rows = [NSMutableArray array];
+        NSMutableArray *rows = [NSMutableArray arrayWithArray:diagnosticRows];
         void (^emit)(NSString *, NSString *) = ^(NSString *step, NSString *result) {
             NSUInteger index = [rows indexOfObjectPassingTest:^BOOL(NSDictionary *row, NSUInteger i, BOOL *stop) {
                 return [row[@"step"] isEqualToString:step];
@@ -85,6 +220,31 @@ static NSString *ProbeDigest(NSData *data) {
             emit(step, success ? @"成功" : error ?
                 [NSString stringWithFormat:@"失败（SDK 错误码 %ld）", (long)error.code] :
                 @"未返回有效结果（接口未提供错误码）");
+        };
+        // 诊断模式下把检查窗口切成阶段，才能回答“初始化阶段是否已经读过”。
+        // 未启用文件跟踪时为空操作，正式入口行为不变。
+        void (^mark)(NSString *) = ^(NSString *name) {
+#if CAMPUS_COMPONENT_TRACE_FILES
+            if (diagnostics) CampusProbeResourceTraceMark(name);
+#else
+            (void)name;
+#endif
+        };
+        NSDictionary<NSString *, NSString *> *sandboxBaseline = nil;
+#if CAMPUS_COMPONENT_TRACE_FILES
+        if (diagnostics) sandboxBaseline = [CampusProbeContainerSnapshot capture];
+#endif
+        // 沙盒差集不依赖 fopen/open hook，用于检验“派生缓存”这一类解释。
+        void (^sandboxDiff)(NSString *) = ^(NSString *label) {
+#if CAMPUS_COMPONENT_TRACE_FILES
+            if (!diagnostics || sandboxBaseline == nil) return;
+            for (NSDictionary<NSString *, NSString *> *row in
+                 [CampusProbeContainerSnapshot diffSince:sandboxBaseline label:label]) {
+                emit(row[@"step"], row[@"result"]);
+            }
+#else
+            (void)label;
+#endif
         };
         NSString *stage = @"资源检查";
         @try {
@@ -104,11 +264,20 @@ static NSString *ProbeDigest(NSData *data) {
                     [NSString stringWithFormat:@"可读取，%lu 字节，导入后完整性一致", (unsigned long)data.length] :
                     @"读取、Bundle 查找或完整性校验失败，请重新导入资源");
             }
-            if (resourcesValid) {
+            // 诊断模式不因资源不完整而跳过 SDK：这正是“缺图对照”的入口。正式入口保持原门槛。
+            if (resourcesValid || diagnostics) {
 #if CAMPUS_COMPONENT_PROBE
 #if CAMPUS_COMPONENT_TRACE_FILES
-                emit(@"SDK 文件跟踪", CampusProbeResourceTraceBegin(path) ?
+                CampusProbeTraceOptions traceOptions = CampusProbeTraceOptionsTargetsOnly;
+                if (diagnostics) {
+                    traceOptions = CampusProbeTraceOptionsScopedFiles | CampusProbeTraceOptionsAllowMissingReference;
+                }
+                BOOL traceBegan = diagnostics ?
+                    CampusProbeResourceTraceBeginWithOptions(effectivePath, traceOptions) :
+                    CampusProbeResourceTraceBegin(path);
+                emit(@"SDK 文件跟踪", traceBegan ?
                     @"已启用：fopen/open 运行时入口自检通过，覆盖检查窗口内各线程；不展示路径和内容" : @"入口自检或参考资源准备失败；本次不能核实 SDK 文件访问");
+                mark(@"窗口开始");
 #endif
                 for (NSString *name in @[@"MainPlugin", @"MiddleTierPlugin", @"SecurityBodyPlugin"]) {
                     emit(name, NSClassFromString(name) ? @"已链接" : @"未找到组件类");
@@ -118,8 +287,10 @@ static NSString *ProbeDigest(NSData *data) {
                 emit(stage, @"正在执行");
                 // 厂商无参入口传 nil；空字符串会作为非空 UTF-8 指针进入底层，不能假定与默认值等价。
                 emit(@"认证参数", @"使用 SDK 默认 authCode；未提供值，不使用显式空字符串");
-                OpenSecurityGuardManager *manager = [OpenSecurityGuardManager getInstance:nil withCustomBundlePath:path error:&error];
+                OpenSecurityGuardManager *manager = [OpenSecurityGuardManager getInstance:nil withCustomBundlePath:effectivePath error:&error];
                 record(stage, manager != nil && error == nil, error);
+                mark(@"SDK 初始化后");
+                sandboxDiff(@"SDK 初始化后");
                 if (manager && !error) {
                     NSString *version = [manager getSDKVersion];
                     NSCharacterSet *digits = [NSCharacterSet characterSetWithCharactersInString:@"0123456789."];
@@ -165,6 +336,8 @@ static NSString *ProbeDigest(NSData *data) {
                                 @"返回空值；此接口不提供 NSError，原因尚不确定");
                         }
                     } @catch (NSException *exception) { emit(stage, @"发生异常（正文已隐藏）"); }
+                    mark(@"AppKey 之后");
+                    sandboxDiff(@"AppKey 之后");
                     // 抓包中的 AppKey 是输入线索，不等于组件已持有相应密钥。
                     NSCharacterSet *keyCharacters = [NSCharacterSet characterSetWithCharactersInString:
                         @"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"];
@@ -189,12 +362,15 @@ static NSString *ProbeDigest(NSData *data) {
                             error = nil;
                             // 该版本二进制读取 customBundelPath（Bundel 是厂商参数原名）。
                             // 两个初始化入口分别显式传入同一目录。
-                            emit(@"统一签名资源路径", @"显式使用已校验的导入目录（路径不展示）");
-                            ready = [unified init:@{@"customBundelPath": path} error:&error];
+                            emit(@"统一签名资源路径", diagnostics ? @"显式使用当前对照目录（路径不展示）" :
+                                @"显式使用已校验的导入目录（路径不展示）");
+                            ready = [unified init:@{@"customBundelPath": effectivePath} error:&error];
                             record(stage, ready && error == nil, error);
                             ready = ready && error == nil;
                         }
                     } @catch (NSException *exception) { emit(stage, @"发生异常（正文已隐藏）"); }
+                    mark(@"统一签名初始化后");
+                    sandboxDiff(@"统一签名初始化后");
                     if (appKey.length > 0) {
                         stage = @"登录安全字段";
                         emit(stage, @"正在执行");
@@ -251,9 +427,13 @@ static NSString *ProbeDigest(NSData *data) {
             }
         } @catch (NSException *exception) { emit(stage, @"发生异常（正文已隐藏）"); }
         @finally {
+            mark(@"签名之后");
+            sandboxDiff(@"签名之后");
 #if CAMPUS_COMPONENT_TRACE_FILES
             for (NSDictionary *row in CampusProbeResourceTraceEnd()) emit(row[@"step"], row[@"result"]);
 #endif
+            // 对照目录只服务本次诊断；正式入口既不创建也不删除任何目录。
+            if (diagnostics) [[NSFileManager defaultManager] removeItemAtPath:effectivePath error:nil];
         }
         emit(@"服务端签名及设备注册", @"尚未验证");
         NSArray *snapshot = [rows copy];

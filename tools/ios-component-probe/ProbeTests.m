@@ -8,6 +8,7 @@
 #import "CampusComponentProbe.h"
 #import "CampusMtopProbeInput.h"
 #import "ProbeResourceTrace.h"
+#import "ProbeContainerSnapshot.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -18,8 +19,11 @@ static int managerCalls, initCalls, signCalls, completedTests;
 static BOOL failInitialization;
 static NSString *folder;
 static BOOL unifiedPathMatched;
+// 诊断对照在临时目录上执行，不再是导入目录；仅该模式放宽桩组件的路径断言。
+static BOOL diagnosticsRun;
 static int scenario;
 static NSString *previousInput;
+static NSString *managerPath;
 static void Check(BOOL condition, NSString *message);
 
 @interface ProbeStore : NSObject
@@ -65,8 +69,8 @@ static void Check(BOOL condition, NSString *message);
 - (BOOL)init:(NSDictionary *)params error:(NSError **)error {
     initCalls++;
     Check(params[@"authCode"] == nil, @"统一初始化应省略可选 authCode");
-    unifiedPathMatched = [params[@"customBundelPath"] isEqualToString:folder] &&
-        params[@"customBundlePath"] == nil;
+    NSString *bundlePath = params[@"customBundelPath"];
+    unifiedPathMatched = [bundlePath isEqualToString:managerPath] && params[@"customBundlePath"] == nil;
     if (failInitialization) { *error = [NSError errorWithDomain:@"Mock" code:445 userInfo:nil]; return NO; }
     return YES;
 }
@@ -100,8 +104,16 @@ static void Check(BOOL condition, NSString *message);
 @end
 @implementation OpenSecurityGuardManager
 + (instancetype)getInstance:(NSString *)code withCustomBundlePath:(NSString *)path error:(NSError **)error {
-    Check(code == nil && [path isEqualToString:folder], @"管理器应使用默认 authCode 和已校验的资源目录");
+    Check(code == nil && ([path isEqualToString:folder] ||
+        (diagnosticsRun && [path.pathExtension isEqualToString:@"bundle"])),
+        @"管理器应使用默认 authCode；正式检查只用已校验的资源目录，诊断对照允许临时目录");
     managerCalls++;
+    managerPath = [path copy];
+    if (diagnosticsRun) {
+        Check(![[NSFileManager defaultManager] fileExistsAtPath:[path stringByAppendingPathComponent:@"yw_1222.jpg"]] &&
+            ![[NSFileManager defaultManager] fileExistsAtPath:[path stringByAppendingPathComponent:@"yw_1222_mwua.jpg"]],
+            @"两图缺失变体必须在实际 SDK 目录中缺少两图");
+    }
     return [self new];
 }
 - (NSString *)getSDKVersion { return @"1.0"; }
@@ -192,6 +204,55 @@ static void CheckResourceTrace(void) {
     Check(CampusProbeResourceTraceEnd().count == 0, @"准备失败不得留下活动观察");
     puts("文件访问跟踪：身份、摘要、位置、errno、跨线程汇总、open 权限转发及自检清零测试通过。");
 }
+static void CheckDiagnosticTrace(void) {
+    NSString *main = [folder stringByAppendingPathComponent:@"yw_1222.jpg"];
+    NSString *missing = [folder stringByAppendingPathComponent:@"trace-missing"];
+    CampusProbeTraceOptions options = CampusProbeTraceOptionsAllowMissingReference | CampusProbeTraceOptionsScopedFiles;
+    Check(!CampusProbeResourceTraceBeginWithOptions(missing, options), @"哨兵写入失败不得宣称自检通过");
+    Check(CampusProbeResourceTraceEnd().count == 0, @"自检失败不得留下活动窗口");
+    NSString *empty = [folder stringByAppendingPathComponent:@"trace-empty"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:empty withIntermediateDirectories:YES attributes:nil error:nil];
+    Check(CampusProbeResourceTraceBeginWithOptions(empty, options), @"两图缺失时必须校验哨兵的两个入口");
+    CheckReportResult(CampusProbeResourceTraceEnd(), @"SDK 文件入口：yw_1222.jpg", @"fopen 0，open 0；包含工作线程，不包含自检");
+    Check([[NSFileManager defaultManager] contentsOfDirectoryAtPath:empty error:nil].count == 0, @"哨兵自检后应清理自身文件");
+
+    Check(CampusProbeResourceTraceBeginWithOptions(folder, options), @"阶段测试应启用观察");
+    CampusProbeResourceTraceMark(@"窗口开始");
+    FILE *stream = fopen(main.fileSystemRepresentation, "rb");
+    Check(stream != NULL, @"第一阶段应打开资源"); fclose(stream);
+    CampusProbeResourceTraceMark(@"第一段结束");
+    CampusProbeResourceTraceSuspendCurrentThread();
+    stream = fopen(main.fileSystemRepresentation, "rb");
+    Check(stream != NULL, @"内部读取仍应正常执行"); fclose(stream);
+    [CampusProbeContainerSnapshot capture];
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        int fd = open(main.fileSystemRepresentation, O_RDONLY);
+        Check(fd >= 0, @"暂停宿主采样不得影响其它线程"); close(fd);
+        dispatch_semaphore_signal(done);
+    });
+    Check(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) == 0, @"工作线程测试应完成");
+    CampusProbeResourceTraceResumeCurrentThread();
+    int fd = open(main.fileSystemRepresentation, O_RDONLY);
+    Check(fd >= 0, @"第二阶段应打开资源"); close(fd);
+    CampusProbeResourceTraceSuspendCurrentThread();
+    NSString *sibling = [folder stringByAppendingString:@"-other"];
+    [[NSFileManager defaultManager] createDirectoryAtPath:sibling withIntermediateDirectories:YES attributes:nil error:nil];
+    NSString *other = [sibling stringByAppendingPathComponent:@"private-scope-file.dat"];
+    [@"mock" writeToFile:other atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    CampusProbeResourceTraceResumeCurrentThread();
+    fd = open(other.fileSystemRepresentation, O_RDONLY);
+    Check(fd >= 0, @"同前缀目录测试文件应可读取"); close(fd);
+    CampusProbeResourceTraceMark(@"第二段结束");
+    NSArray *rows = CampusProbeResourceTraceEnd();
+    CheckReportResult(rows, @"阶段文件访问：第一段结束",
+        @"yw_1222.jpg：1 次（成功 1）；yw_1222_mwua.jpg：0 次（成功 0）；目录内已记录访问 1");
+    CheckReportResult(rows, @"阶段文件访问：第二段结束",
+        @"yw_1222.jpg：2 次（成功 2）；yw_1222_mwua.jpg：0 次（成功 0）；目录内已记录访问 2");
+    Check(ReportResult(rows, @"窗口文件 4") == nil, @"相同前缀的兄弟目录不得冒充参考目录");
+    [[NSFileManager defaultManager] removeItemAtPath:sibling error:nil];
+    puts("诊断跟踪测试覆盖：哨兵失败、缺图自检、阶段增量、内部采样排除、跨线程及目录边界。");
+}
 static void CheckInputContract(void) {
     NSData *body = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *headers = @{@"x-t": @"1700000000", @"x-uid": @"sample-uid", @"x-reqbiz-ext": @"sample-biz",
@@ -223,13 +284,20 @@ static void RunCase(int number) {
     managerCalls = initCalls = signCalls = 0;
     unifiedPathMatched = NO;
     failInitialization = number == 3;
+    diagnosticsRun = number == 13;
+    // 13 从完整来源派生缺图目录；14 移除来源后验证正式入口仍拦住 SDK。
+    if (number == 14) {
+        [[NSFileManager defaultManager] removeItemAtPath:[folder stringByAppendingPathComponent:@"yw_1222.jpg"] error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:[folder stringByAppendingPathComponent:@"yw_1222_mwua.jpg"] error:nil];
+    }
     if (number == 2) [@"changed" writeToFile:[folder stringByAppendingPathComponent:@"yw_1222.jpg"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
     if (number == 3) [@"mock" writeToFile:[folder stringByAppendingPathComponent:@"yw_1222.jpg"] atomically:YES encoding:NSUTF8StringEncoding error:nil];
     __block NSUInteger progressCount = 0;
     NSLog(@"SG ERROR: 999\n"); // 作用域外的日志不得污染下一次结果。
-    [CampusComponentProbe runAtResourcePath:folder appKeyHint:number == 0 || number >= 7 ? nil : @"mock-input-key"
-        progress:^(NSArray *rows) { progressCount++; }
-        completion:^(NSArray *rows) {
+    void (^probeProgress)(NSArray<NSDictionary<NSString *, NSString *> *> *) =
+        ^(NSArray<NSDictionary<NSString *, NSString *> *> *rows) { progressCount++; };
+    void (^probeCompletion)(NSArray<NSDictionary<NSString *, NSString *> *> *) =
+        ^(NSArray<NSDictionary<NSString *, NSString *> *> *rows) {
             // 集合 description 是调试表示，可能将中文转义为 Unicode；断言直接读取报告字段。
             NSMutableArray *reportParts = [NSMutableArray array];
             for (NSDictionary *row in rows) {
@@ -248,7 +316,7 @@ static void RunCase(int number) {
                 CheckReportResult(rows, @"两次签名比较", @"不同，已随输入变化");
             }
             if (number == 2) Check(managerCalls == 0, @"资源完整性失败时不能进入 SDK");
-            else Check(unifiedPathMatched, @"统一签名必须收到已校验资源路径，参数拼写为 customBundelPath");
+            else if (number != 14) Check(unifiedPathMatched, @"统一签名必须收到已校验资源路径，参数拼写为 customBundelPath");
             if (number == 3) Check(initCalls == 1 && signCalls == 0 && [report containsString:@"445"], @"保留 SDK 错误码并禁止失败后的签名调用");
             if (number == 4) {
                 Check(signCalls == 2, @"残缺字典场景应完成两次离线调用");
@@ -271,7 +339,7 @@ static void RunCase(int number) {
                     @"打开尝试 1，成功 1；同一导入文件 1；内容一致 1，不同 0，无法校验 0；最近打开失败 errno 0");
                 CheckReportResult(rows, @"SDK 文件入口：yw_1222.jpg", number == 11 ?
                     @"fopen 1，open 0；包含工作线程，不包含自检" : @"fopen 0，open 1；包含工作线程，不包含自检");
-            } else if (number != 2) {
+            } else if (number != 2 && number < 13) {
                 CheckReportResult(rows, @"SDK 文件访问：yw_1222.jpg", @"窗口内未观察到 fopen/open；不能据此判定 SDK 未读取文件");
             }
             if (number == 7 || number == 8) {
@@ -282,13 +350,42 @@ static void RunCase(int number) {
                 CheckReportResult(rows, @"AppKey 底层错误", @"SG ERROR: 204");
                 CheckReportResult(rows, @"AppKey 错误解释", @"SDK 报告安全图片格式不正确；需核对 SDK 与资源的类别及版本兼容性，不能据此判定 Bundle ID 不匹配");
                 Check(signCalls == 0, @"格式错误诊断不能触发签名");
-            } else if (number != 2) {
+            } else if (number != 2 && number != 14) {
                 CheckReportResult(rows, @"AppKey 底层错误", @"未捕获同步数字错误码；不能据此判定底层成功");
             }
+            if (number == 13) {
+                Check(managerCalls == 1 && initCalls == 1, @"诊断对照必须在资源不完整时仍然进入 SDK");
+                Check([ReportResult(rows, @"诊断对照模式") containsString:@"变体"], @"诊断报告必须标明对照变体");
+                Check(ReportResult(rows, @"诊断对照资源：yw_1222.jpg") != nil &&
+                    ReportResult(rows, @"诊断对照资源：yw_1222_mwua.jpg") != nil,
+                    @"诊断报告必须列出每个资源在对照目录中的实际状态");
+                Check(ReportResult(rows, @"阶段文件访问：窗口开始") != nil, @"诊断报告必须给出阶段文件访问统计");
+                Check([[NSData dataWithContentsOfFile:[folder stringByAppendingPathComponent:@"yw_1222.jpg"]]
+                    isEqualToData:[@"mock" dataUsingEncoding:NSUTF8StringEncoding]], @"诊断不得修改导入来源");
+                Check(![[NSFileManager defaultManager] fileExistsAtPath:managerPath], @"完成后应清理自己创建的对照目录");
+            }
+            if (number == 14) {
+                Check(managerCalls == 0, @"正式入口仍必须在资源不完整时拦在 SDK 之前");
+                Check(ReportResult(rows, @"诊断对照模式") == nil, @"正式入口不得输出诊断对照行");
+                [CampusComponentProbe runDiagnosticAtResourcePath:folder variant:@"baseline"
+                    progress:^(NSArray *ignored) {} completion:^(NSArray *failed) {
+                        Check(managerCalls == 0 && [ReportResult(failed, @"诊断对照模式") containsString:@"未调用 SDK"],
+                            @"诊断基线不得把损坏来源当作有效对照");
+                    }];
+            }
             completedTests++;
-            if (number < 12) RunCase(number + 1);
+            if (number < 14) RunCase(number + 1);
             else { [[NSFileManager defaultManager] removeItemAtPath:folder error:nil]; printf("%d 项原生检查流程测试通过。\n", completedTests); exit(0); }
-        }];
+        };
+    // 13 走诊断入口（资源不完整也必须进入 SDK），14 走正式入口（必须仍然拦在 SDK 之前）。
+    if (number == 13) {
+        [CampusComponentProbe runDiagnosticAtResourcePath:folder variant:@"both-missing"
+            progress:probeProgress completion:probeCompletion];
+    } else {
+        [CampusComponentProbe runAtResourcePath:folder
+            appKeyHint:number == 0 || number >= 7 ? nil : @"mock-input-key"
+            progress:probeProgress completion:probeCompletion];
+    }
 }
 
 int main(void) {
@@ -309,6 +406,7 @@ int main(void) {
         }
         [manifest writeToFile:[folder stringByAppendingPathComponent:@"probe-manifest.plist"] atomically:YES];
         CheckResourceTrace();
+        CheckDiagnosticTrace();
         dispatch_async(dispatch_get_main_queue(), ^{ RunCase(0); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ Check(NO, @"原生测试超时"); });
         dispatch_main();

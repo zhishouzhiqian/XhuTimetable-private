@@ -15,6 +15,7 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
     private let showsCloseButton: Bool
     private let importButton = UIButton(type: .system)
     private let runButton = UIButton(type: .system)
+    private let diagnosticButton = UIButton(type: .system)
     private let output = UILabel()
     private let appKeyField = UITextField()
     private let copyButton = UIButton(type: .system)
@@ -50,6 +51,8 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
         importButton.addTarget(self, action: #selector(importResources), for: .touchUpInside)
         runButton.setTitle("开始组件检查", for: .normal)
         runButton.addTarget(self, action: #selector(runCheck), for: .touchUpInside)
+        diagnosticButton.setTitle("诊断对照运行（每个变体一个新进程）", for: .normal)
+        diagnosticButton.addTarget(self, action: #selector(runDiagnostic), for: .touchUpInside)
         appKeyField.placeholder = "可选：抓包中的 AppKey"
         appKeyField.borderStyle = .roundedRect
         appKeyField.keyboardType = .asciiCapable
@@ -76,11 +79,12 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
         resourcePath = Self.importedPath
         importButton.isEnabled = !Self.attempted
         runButton.isEnabled = resourcePath != nil && !Self.attempted
+        diagnosticButton.isEnabled = resourcePath != nil && !Self.attempted
         output.text = Self.lastResult ?? (resourcePath == nil ? "等待导入检查资源。" : "检查资源已导入。可以开始组件检查。")
         output.font = .preferredFont(forTextStyle: .body)
         output.adjustsFontForContentSizeCategory = true
         output.numberOfLines = 0
-        let column = UIStackView(arrangedSubviews: [close, title, introduction, importButton, appKeyField, hint, runButton, copyButton, output])
+        let column = UIStackView(arrangedSubviews: [close, title, introduction, importButton, appKeyField, hint, runButton, diagnosticButton, copyButton, output])
         column.axis = .vertical
         column.spacing = 16
         column.translatesAutoresizingMaskIntoConstraints = false
@@ -100,7 +104,8 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
             column.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor, constant: -24),
             column.widthAnchor.constraint(equalTo: scroll.frameLayoutGuide.widthAnchor, constant: -40),
             importButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
-            runButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
+            runButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44),
+            diagnosticButton.heightAnchor.constraint(greaterThanOrEqualToConstant: 44)
         ])
         NotificationCenter.default.addObserver(self, selector: #selector(refreshReport), name: Self.reportChanged, object: nil)
         refreshReport()
@@ -158,10 +163,12 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
             Self.importedPath = folder.path
             output.text = "检查资源已导入。可以开始组件检查。"
             runButton.isEnabled = true
+            diagnosticButton.isEnabled = true
         } catch {
             resourcePath = nil
             Self.importedPath = nil
             runButton.isEnabled = false
+            diagnosticButton.isEnabled = false
             output.text = "资源文件无效或无法读取，请导入提供的检查资源 JSON 文件。"
         }
     }
@@ -178,6 +185,7 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
         Self.isRunning = true
         importButton.isEnabled = false
         runButton.isEnabled = false
+        diagnosticButton.isEnabled = false
         output.text = "正在检查 SDK 与当次安全字段…"
         Self.lastResult = "组件检查已开始。如需再次检查，请彻底关闭应用后重新打开。"
         let watchdog = DispatchWorkItem {
@@ -188,6 +196,54 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
         Self.timeout = watchdog
         DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: watchdog)
         CampusComponentProbe.run(atResourcePath: path, appKeyHint: key.isEmpty ? nil : key, progress: { rows in
+            Self.updateReport(rows, completed: false)
+        }, completion: { rows in
+            Self.timeout?.cancel()
+            Self.timeout = nil
+            Self.isRunning = false
+            Self.updateReport(rows, completed: true)
+        })
+        refreshReport()
+    }
+
+    /// 诊断对照：每个变体都必须使用新的应用进程，因为 SDK 是进程单例。
+    @objc private func runDiagnostic() {
+        guard !Self.attempted, !Self.isRunning, resourcePath != nil else { return }
+        let sheet = UIAlertController(title: "诊断对照运行",
+            message: "比较资源存在性或内容变化对检查结果的影响。本次只运行一个变体；下次对照前请彻底关闭应用，再重新打开。",
+            preferredStyle: .actionSheet)
+        for entry in CampusComponentProbe.diagnosticVariants() {
+            guard let identifier = entry["id"], let title = entry["title"] else { continue }
+            sheet.addAction(UIAlertAction(title: title, style: .default) { [weak self] _ in
+                self?.startDiagnostic(variant: identifier)
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = diagnosticButton
+            popover.sourceRect = diagnosticButton.bounds
+        }
+        present(sheet, animated: true)
+    }
+
+    private func startDiagnostic(variant: String) {
+        guard !Self.attempted, !Self.isRunning, let path = resourcePath else { return }
+        view.endEditing(true)
+        Self.attempted = true
+        Self.isRunning = true
+        importButton.isEnabled = false
+        runButton.isEnabled = false
+        diagnosticButton.isEnabled = false
+        output.text = "正在执行诊断对照…"
+        Self.lastResult = "诊断对照已开始。如需再次对照，请彻底关闭应用后重新打开。"
+        let watchdog = DispatchWorkItem {
+            guard Self.isRunning else { return }
+            Self.lastResult = (Self.lastResult ?? "") + "\n\n诊断对照超过 45 秒（PROBE_TIMEOUT）。以上保留最后执行步骤；请复制结果，重启应用后再试。"
+            NotificationCenter.default.post(name: Self.reportChanged, object: nil)
+        }
+        Self.timeout = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + 45, execute: watchdog)
+        CampusComponentProbe.runDiagnostic(atResourcePath: path, variant: variant, progress: { rows in
             Self.updateReport(rows, completed: false)
         }, completion: { rows in
             Self.timeout?.cancel()
@@ -215,6 +271,7 @@ final class LaundryComponentCheckViewController: UIViewController, UIDocumentPic
         importButton.isEnabled = !Self.attempted
         appKeyField.isEnabled = !Self.attempted
         runButton.isEnabled = resourcePath != nil && !Self.attempted
+        diagnosticButton.isEnabled = resourcePath != nil && !Self.attempted
     }
 
     @objc private func copyReport() {
