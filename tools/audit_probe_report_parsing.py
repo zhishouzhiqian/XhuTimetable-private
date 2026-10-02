@@ -98,6 +98,58 @@ else:
     else:
         print(f'  阶段行定位标签 "{stage_label.group(1)}" 存在于格式串中')
 
+# 5. 目录外归类行与扩展名行：测试用 rangeOfString: 定位的标签必须逐字存在于 C 格式串。
+for step_label, fmt_regex in [
+        ('目录外访问归类', r'@"(合计 %u；应用包内 %u；临时目录 %u；用户目录 %u；系统目录 %u；其它 %u)"'),
+        ('目录外访问扩展名', r'@"(图片 %u；plist %u；数据库/dat %u；配置\(json/xml/config\) %u；无扩展名 %u；其它 %u)"')]:
+    fmt_match = re.search(fmt_regex, impl)
+    if not fmt_match:
+        errors.append(f'找不到「{step_label}」行的格式串')
+        continue
+    row_format = fmt_match.group(1)
+    print(f'C {step_label} 格式串：{row_format}')
+    # 测试里的标签有三种写法：rangeOfString:@"标签"、for-in 遍历的 @[...] 数组，
+    # 以及 NSScanner 的 scanString:@"标签"（合计就是用这种解析的）。
+    # 漏掉任何一种都会让 %u 个数对不上而误报。
+    test_labels = set(re.findall(r'rangeOfString:@"([^"]+)"', tests))
+    test_labels |= set(re.findall(r'scanString:@"([^"]+)"', tests))
+    for array_literal in re.findall(r'@\[([^\]]*)\]', tests, re.S):
+        for label in re.findall(r'@"([^"]*)"', array_literal):
+            test_labels.add(label)
+    # 只保留确实属于本行格式串的标签
+    row_labels = {label for label in test_labels if label and label in row_format}
+    missing = sorted(label for label in row_labels if label not in row_format)
+    if missing:
+        errors.append(f'「{step_label}」测试定位标签与格式串不一致：{missing}')
+    # 格式串里 %u 的个数必须等于测试解析的标签个数（求和断言依赖这一点）
+    count = row_format.count('%u')
+    print(f'  测试解析的标签：{sorted(row_labels)}')
+    print(f'  格式串含 {count} 个 %u；测试解析 {len(row_labels)} 个标签')
+    if len(row_labels) != count:
+        errors.append(f'「{step_label}」测试解析的标签数 {len(row_labels)} '
+                      f'与格式串 %u 个数 {count} 不一致，求和断言会失效')
+
+# 6. 安全资源命名行：命中与未命中两种文案都必须存在，且命名域描述与实现一致
+if '目录外安全资源命名' not in impl:
+    errors.append('缺少「目录外安全资源命名」报告行')
+else:
+    if 'yw_*/mwua/jaq' not in impl:
+        errors.append('安全资源命名行的未命中文案与实现的命名域（yw_/mwua/jaq）不一致')
+    if re.search(r'strcmp\(lower, "jpg"\)', impl) and \
+            'ProbeLooksLikeSecurityName' in impl:
+        # 命名匹配不得按 .jpg 扩展名，否则用户照片名会进报告
+        name_func = impl[impl.find('ProbeLooksLikeSecurityName(const char *base)'):]
+        name_func = name_func[:name_func.find('\n}')]
+        if 'jpg' in name_func or 'jpeg' in name_func:
+            errors.append('ProbeLooksLikeSecurityName 不得按 .jpg/.jpeg 扩展名匹配（隐私约束）')
+    print('安全资源命名行：命名域 yw_/mwua/jaq，未按图片扩展名匹配（隐私约束成立）')
+
+# 7. 测试必须同时覆盖命中与不命中两个分支（正例 yw_probe_outside.jpg、反例 IMG_1234）
+if 'yw_probe_outside' not in tests:
+    errors.append('桩测试缺少安全资源命名命中分支的正例')
+if 'IMG_1234' not in tests:
+    errors.append('桩测试缺少「普通图片名不得进报告」的反例断言')
+
 print()
 if errors:
     print('报告行解析模拟：发现问题')

@@ -108,15 +108,17 @@ if not names:
     errors.append('找不到 ProbeHostChannelNames 定义')
 else:
     channels = re.findall(r'"(\w+)"', names.group(1))
-    if not re.search(r'ProbeHostChannelCount', impl):
-        errors.append('缺少 ProbeHostChannelCount 枚举')
-    # 只从 enum 体内取 ProbeHostChannel* 成员，避免把 typedef ProbeHostChannelIndex 算进去。
-    enum_body = re.search(r'enum\s*\{([^}]*)\}\s*;', impl, re.S)
+    # 只从「包含 ProbeHostChannelCount 的那个 enum」取成员：文件里存在多个匿名 enum
+    # （例如 ProbeSecurityNameLimit），用第一个匹配会取错。
     enum_members = []
-    if enum_body:
-        for token in re.findall(r'(ProbeHostChannel\w+)', enum_body.group(1)):
+    for body in re.findall(r'enum\s*\{([^}]*)\}\s*;', impl, re.S):
+        if 'ProbeHostChannelCount' not in body:
+            continue
+        for token in re.findall(r'(ProbeHostChannel\w+)', body):
             if token != 'ProbeHostChannelCount' and token not in enum_members:
                 enum_members.append(token)
+    if not re.search(r'ProbeHostChannelCount', impl):
+        errors.append('缺少 ProbeHostChannelCount 枚举')
     if len(enum_members) != len(channels):
         errors.append(f'枚举成员 {len(enum_members)} 个与通道名 {len(channels)} 个不一致：'
                       f'{enum_members} vs {channels}')

@@ -315,7 +315,14 @@ static void CheckHostChannelTrace(void) {
     // 目录外文件在窗口开启前创建、结束后删除，避免原子写入的内部
     // fileExistsAtPath 调用污染 NSFileManager 通道计数。
     NSString *outside = [NSTemporaryDirectory() stringByAppendingPathComponent:@"probe-host-outside.jpg"];
-    [@"outside" writeToFile:outside atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    // 目录外且匹配安全资源命名域的文件：用于验证「目录外安全资源命名」的命中分支。
+    // 名字必须不等于 yw_1222.jpg / yw_1222_mwua.jpg，否则会被当成目标命中而污染计数。
+    NSString *outsideSecurity = [NSTemporaryDirectory() stringByAppendingPathComponent:@"yw_probe_outside.jpg"];
+    // 故意不用 .jpg 命名的用户文件：验证收窄后的匹配不会把普通图片名记进报告。
+    NSString *outsideUserPhoto = [NSTemporaryDirectory() stringByAppendingPathComponent:@"IMG_1234.JPG"];
+    for (NSString *path in @[outside, outsideSecurity, outsideUserPhoto]) {
+        [@"outside" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    }
     CampusProbeTraceOptions options = CampusProbeTraceOptionsScopedFiles | CampusProbeTraceOptionsHostChannels;
     Check(CampusProbeResourceTraceBeginWithOptions(folder, options),
         @"拦截安装或 fopen/open 自检失败时不得宣称窗口有效");
@@ -361,8 +368,12 @@ static void CheckHostChannelTrace(void) {
     CampusProbeResourceTraceResumeCurrentThread();
     // 目录外读取应记为目录外，不冒充目录内命中。
     [NSData dataWithContentsOfFile:outside];
+    [NSData dataWithContentsOfFile:outsideSecurity];
+    [NSData dataWithContentsOfFile:outsideUserPhoto];
     NSArray *rows = CampusProbeResourceTraceEnd();
-    [[NSFileManager defaultManager] removeItemAtPath:outside error:nil];
+    for (NSString *path in @[outside, outsideSecurity, outsideUserPhoto]) {
+        [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    }
     Check(ReportResult(rows, @"宿主通道说明") != nil, @"启用宿主通道后必须输出说明行");
 
     // 每条通道都必须有报告行且自检命中，否则真机上的零命中无法解释。
@@ -453,6 +464,76 @@ static void CheckHostChannelTrace(void) {
         if ([row[@"step"] hasPrefix:@"窗口文件 "] && [row[@"result"] containsString:@"入口 NSData"]) foundNSDataEntry = YES;
     }
     Check(foundNSDataEntry, @"NSData 读到的目标文件必须进入窗口文件清单");
+    // 目录外访问归类：本测试只制造一次目录外读取（outside 位于 NSTemporaryDirectory），
+    // 因此合计至少 1 且必须落入“临时目录”类；各类别之和不得超过合计。
+    NSString *outsideRow = ReportResult(rows, @"目录外访问归类");
+    Check(outsideRow != nil, @"启用宿主通道后必须输出目录外访问归类行");
+    NSScanner *scanner = [NSScanner scannerWithString:outsideRow];
+    int outsideTotal = 0;
+    Check([scanner scanString:@"合计 " intoString:NULL] && [scanner scanInt:&outsideTotal],
+        @"目录外访问归类行必须可解析合计");
+    Check(outsideTotal >= 1, @"目录外读取必须被归类计数");
+    int bucketSum = 0;
+    for (NSString *label in @[@"应用包内 ", @"临时目录 ", @"用户目录 ", @"系统目录 ", @"其它 "]) {
+        NSRange range = [outsideRow rangeOfString:label];
+        Check(range.location != NSNotFound,
+            [NSString stringWithFormat:@"归类行必须包含 %@", label]);
+        NSScanner *bucket = [NSScanner scannerWithString:[outsideRow substringFromIndex:range.location]];
+        int value = 0;
+        Check([bucket scanString:label intoString:NULL] && [bucket scanInt:&value],
+            [NSString stringWithFormat:@"%@ 计数必须可解析", label]);
+        bucketSum += value;
+    }
+    Check(bucketSum == outsideTotal, @"各类别计数之和必须等于合计，不得漏计或重复计");
+    // outside 文件位于临时目录，必须被正确归类，而不是落进“其它”。
+    NSRange tempRange = [outsideRow rangeOfString:@"临时目录 "];
+    NSScanner *tempScanner = [NSScanner scannerWithString:[outsideRow substringFromIndex:tempRange.location]];
+    int tempCount = 0;
+    Check([tempScanner scanString:@"临时目录 " intoString:NULL] && [tempScanner scanInt:&tempCount],
+        @"临时目录计数必须可解析");
+    Check(tempCount >= 1, @"NSTemporaryDirectory 下的目录外读取必须归入临时目录类");
+    // 安全资源命名行必须存在，且只记录 SecurityGuard 命名域的文件名。
+    NSString *securityRow = ReportResult(rows, @"目录外安全资源命名");
+    Check(securityRow != nil, @"必须输出目录外安全资源命名行（无命中时也要如实说明）");
+    // 正例：目录外但符合 yw_ 命名域的文件必须被记录，证明命中分支可用。
+    Check([securityRow containsString:@"yw_probe_outside.jpg"],
+        @"匹配 yw_ 命名域的目录外文件必须被记录");
+    // 反例：普通用户照片名（.JPG 扩展）绝不能进报告——这是收窄匹配规则的目的。
+    Check(![securityRow containsString:@"IMG_1234"],
+        @"普通图片文件名不得进入报告（隐私约束）");
+    Check(![securityRow containsString:@"probe-host-outside"],
+        @"非安全资源命名的目录外文件不得进入报告");
+    // 扩展名直方图：三个目录外文件都是图片扩展名，且各类别之和等于合计。
+    NSString *extRow = ReportResult(rows, @"目录外访问扩展名");
+    Check(extRow != nil, @"必须输出目录外访问扩展名行");
+    int extImage = 0;
+    NSRange imageRange = [extRow rangeOfString:@"图片 "];
+    Check(imageRange.location != NSNotFound, @"扩展名行必须包含图片类别");
+    NSScanner *imageScanner = [NSScanner scannerWithString:[extRow substringFromIndex:imageRange.location]];
+    Check([imageScanner scanString:@"图片 " intoString:NULL] && [imageScanner scanInt:&extImage],
+        @"图片类别计数必须可解析");
+    Check(extImage >= 3, @"三个目录外图片文件都应计入图片类别");
+    int extSum = 0;
+    for (NSString *label in @[@"图片 ", @"plist ", @"数据库/dat ", @"配置(json/xml/config) ",
+                              @"无扩展名 ", @"其它 "]) {
+        NSRange range = [extRow rangeOfString:label];
+        Check(range.location != NSNotFound, [NSString stringWithFormat:@"扩展名行必须包含 %@", label]);
+        NSScanner *bucket = [NSScanner scannerWithString:[extRow substringFromIndex:range.location]];
+        int value = 0;
+        Check([bucket scanString:label intoString:NULL] && [bucket scanInt:&value],
+            [NSString stringWithFormat:@"%@ 计数必须可解析", label]);
+        extSum += value;
+    }
+    Check(extSum == outsideTotal, @"扩展名各类别之和必须等于目录外合计");
+    // 交叉校验：各通道的“目录外”之和必须等于归类合计。这两条计数走的是不同代码路径
+    // （ProbeTallyLocked 与 ProbeRecordOutsideLocked 成对调用），相等才说明接线没漏。
+    int channelOutsideSum = 0;
+    for (unsigned int index = 0; index < sizeof(channels) / sizeof(channels[0]); index++) {
+        channelOutsideSum += HostReport(rows,
+            [NSString stringWithUTF8String:channels[index]]).outside;
+    }
+    Check(channelOutsideSum == outsideTotal,
+        @"各通道目录外计数之和必须等于归类合计，否则存在漏计或重复计");
     for (NSDictionary *row in rows) {
         Check(![row[@"result"] containsString:folder] && ![row[@"result"] containsString:@"private-"], @"宿主通道不得泄露路径或内容");
     }

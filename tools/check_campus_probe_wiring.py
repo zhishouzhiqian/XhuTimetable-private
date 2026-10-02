@@ -196,6 +196,8 @@ def check_header_dependencies():
         (r'\bstruct stat\b|\bfstat\s*\(|\bstat\s*\(', '<sys/stat.h>'),
         (r'\bfopen\s*\(|\bsnprintf\s*\(|\bfileno\s*\(', '<stdio.h>'),
         (r'\bmemcmp\s*\(|\bstrlen\s*\(|\bmemset\s*\(|\bstrcmp\s*\(', '<string.h>'),
+        # Darwin 把 strcasecmp/strcasecmp 声明在 <strings.h>，不在 <string.h>。
+        (r'\bstrcasecmp\s*\(|\bstrncasecmp\s*\(', '<strings.h>'),
         (r'\bmalloc\s*\(|\bfree\s*\(', '<stdlib.h>'),
         (r'\bclose\s*\(|\blseek\s*\(|\baccess\s*\(|\bunlink\s*\(|\bgetpid\s*\(', '<unistd.h>'),
     ]
@@ -213,6 +215,46 @@ def check_header_dependencies():
                 if not any(item == name or item.endswith('/' + name) for item in included):
                     fail('{} 使用了 {} 相关标识符但未 include {}'.format(
                         path.name, name, header))
+
+
+def check_outside_classification():
+    """目录外访问归类的接线与隐私边界。
+
+    这三行是解开「SDK 无视对照目录却对主图存在性敏感」矛盾的唯一手段，
+    不能被静默删除；同时它们必须只输出类别计数与安全资源命名域的 basename，
+    绝不能把原始路径变量格式化进报告。
+    """
+    implementation = read(TOOLS / "ProbeResourceTrace.m")
+    tests = read(TOOLS / "ProbeTests.m")
+    for row in ["目录外访问归类", "目录外访问扩展名", "目录外安全资源命名"]:
+        if row not in implementation:
+            fail("ProbeResourceTrace.m 缺少报告行：{}".format(row))
+        if row not in tests:
+            fail("桩测试缺少对报告行的断言：{}".format(row))
+    for marker in ["ProbeRecordOutsideLocked", "ProbeLooksLikeSecurityName",
+                   "extImage", "appBundle"]:
+        if marker not in implementation:
+            fail("ProbeResourceTrace.m 缺少目录外归类实现：{}".format(marker))
+    # 归类计数必须成对增加，否则「各通道目录外之和 == 归类合计」的不变量会破。
+    if implementation.count("record->outside++") != \
+            implementation.count("ProbeRecordOutsideLocked(") - 1:
+        fail("record->outside++ 与 ProbeRecordOutsideLocked 调用数不成对（差 1 为定义处）")
+    # 自检清零必须覆盖 ProbeOutside，否则探针自己的 I/O 会冒充 SDK 行为。
+    if implementation.count("memset(&ProbeOutside, 0, sizeof(ProbeOutside))") < 2:
+        fail("ProbeOutside 必须在窗口开启与自检结束后各清零一次，否则自检 I/O 会污染报告")
+    # 隐私：命名匹配不得按图片扩展名（会把用户照片名写进报告）。
+    name_func_start = implementation.find("ProbeLooksLikeSecurityName(const char *base)")
+    if name_func_start < 0:
+        fail("找不到 ProbeLooksLikeSecurityName 定义")
+    else:
+        name_func = implementation[name_func_start:implementation.find("\n}", name_func_start)]
+        for banned in ['"jpg"', '"jpeg"', '"png"', '"JPG"']:
+            if banned in name_func:
+                fail("ProbeLooksLikeSecurityName 不得按图片扩展名匹配 {}（隐私约束）".format(banned))
+    # 隐私：报告行不得把原始路径变量 full 直接格式化输出。
+    report_section = implementation[implementation.find("目录外访问归类"):]
+    if re.search(r'stringWithFormat:@"[^"]*%s[^"]*",\s*full', report_section):
+        fail("目录外报告行不得直接输出原始路径")
 
 
 def check_host_channels():
@@ -325,6 +367,7 @@ def main():
     check_diagnostics_entry()
     check_host_channels()
     check_header_dependencies()
+    check_outside_classification()
     check_report_hygiene()
     check_brace_balance()
     if failures:

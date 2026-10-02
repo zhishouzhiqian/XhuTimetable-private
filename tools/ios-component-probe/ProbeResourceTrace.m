@@ -53,6 +53,29 @@ typedef struct {
 
 typedef int ProbeHostChannelIndex;
 
+// 目录外访问的归类。第二轮真机（6f5eb65）出现一个必须解开的矛盾：八组对照证明
+// 错误码对「对照目录里主图是否存在」敏感（缺图 203 / 有图 204，与内容无关），
+// 但 11 条已自检命中的通道显示 SDK 对对照目录做了 0 次访问、对 yw_1222*.jpg
+// 目标命中 0、open/fopen/fd 全 0。要解开它，必须知道那 254 次目录外访问去了哪里。
+//
+// 只记录粗粒度目录类别与安全资源命名模式的 basename：类别不含任何路径，
+// basename 仅在匹配 yw_*/.jpg/.jpeg/.mwua 这类 SDK 域命名时记录，其余一律不记，
+// 因此不会泄露用户数据或完整路径。
+enum {
+    ProbeSecurityNameLimit = 8,
+    ProbeSecurityNameSize = 64,
+};
+
+typedef struct {
+    unsigned int total, appBundle, temp, home, system, other;
+    // 扩展名直方图：只记类别不记文件名，用于回答“SDK 是否在别处寻找图片/配置”，
+    // 同时不泄露任何用户数据。
+    unsigned int extImage, extPlist, extDatabase, extConfig, extNone, extOther;
+    unsigned int securityNameCount;
+    BOOL securityNameOverflow;
+    char securityNames[ProbeSecurityNameLimit][ProbeSecurityNameSize];
+} ProbeOutsideRecord;
+
 // fd→路径缓存：read/pread 是热路径，不能每次都做 F_GETPATH 系统调用。
 typedef struct {
     BOOL used, resolved;
@@ -108,6 +131,11 @@ static char ProbeScopeRootResolved[1024];
 static size_t ProbeScopeRootResolvedLength;
 static ProbeHostRecord ProbeHost[ProbeHostChannelCount];
 static ProbeFdEntry ProbeFdCache[ProbeFdCacheLimit];
+static ProbeOutsideRecord ProbeOutside;
+// app bundle 路径前缀在 Begin 时缓存为 C 字符串，避免在锁内、热路径上反复调
+// NSBundle.mainBundle.bundlePath（stat 一轮命中 150 次）。
+static char ProbeAppBundlePrefix[1024];
+static size_t ProbeAppBundlePrefixLength;
 static pthread_mutex_t ProbeTraceMutex = PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local unsigned int ProbeOpenDepth;
 static _Thread_local unsigned int ProbeInternalReadDepth;
@@ -265,6 +293,93 @@ static BOOL ProbePathInScope(const char *path) {
 }
 
 // 必须在持锁状态下调用。full 为 NULL 时按非目录内处理（例如 Bundle 解析失败）。
+// 目录外访问按粗粒度类别归类，并对 SDK 域命名（yw_*/.jpg/.jpeg/.mwua/jaq）的
+// basename 去重记录——这是解开「SDK 无视对照目录、却对主图存在性敏感」矛盾的关键。
+// 只认 SecurityGuard 安全资源的实际命名域：yw_* 前缀、*.mwua* 、jaq*。
+// 故意不按 .jpg/.jpeg 扩展名匹配——那样会把窗口内访问到的用户照片文件名
+// （例如相册里的 IMG_1234.JPG）记进诊断报告，违反“报告不得泄露用户数据”的约束。
+// yw_1222.jpg / yw_1222_mwua.jpg 都由 yw_ 前缀覆盖，收窄不影响本调查目标。
+static BOOL ProbeLooksLikeSecurityName(const char *base) {
+    if (!base || !base[0]) return NO;
+    return strncmp(base, "yw_", 3) == 0 || strstr(base, "mwua") != NULL ||
+        strncmp(base, "jaq", 3) == 0;
+}
+
+static void ProbeRecordOutsideLocked(const char *full) {
+    ProbeOutside.total++;
+    if (full && full[0]) {
+        // 目录类别只看前缀特征，绝不记录完整路径。app bundle 前缀已在 Begin 缓存。
+        if (ProbeAppBundlePrefixLength && strncmp(full, ProbeAppBundlePrefix,
+                ProbeAppBundlePrefixLength) == 0 &&
+            (full[ProbeAppBundlePrefixLength] == '/' || full[ProbeAppBundlePrefixLength] == '\0')) {
+            ProbeOutside.appBundle++;
+        } else if (strstr(full, "/tmp/") || strstr(full, "/private/var/folders/") ||
+                   strstr(full, "/var/folders/")) {
+            ProbeOutside.temp++;
+        } else if (strstr(full, "/var/mobile/") || strstr(full, "/Users/") ||
+                   strstr(full, "/private/var/mobile/")) {
+            ProbeOutside.home++;
+        } else if (strncmp(full, "/System/", 8) == 0 || strncmp(full, "/usr/", 5) == 0 ||
+                   strncmp(full, "/private/var/db/", 16) == 0 || strncmp(full, "/Developer/", 11) == 0) {
+            ProbeOutside.system++;
+        } else {
+            ProbeOutside.other++;
+        }
+        const char *base = strrchr(full, '/');
+        base = base ? base + 1 : full;
+        // 扩展名直方图：只看后缀类别，不记文件名本身。
+        const char *dot = strrchr(base, '.');
+        if (!dot || dot == base || !dot[1]) {
+            ProbeOutside.extNone++;
+        } else {
+            const char *ext = dot + 1;
+            size_t len = strlen(ext);
+            char lower[16];
+            if (len >= sizeof(lower)) len = sizeof(lower) - 1;
+            for (size_t i = 0; i < len; i++) {
+                lower[i] = (ext[i] >= 'A' && ext[i] <= 'Z') ? (char)(ext[i] - 'A' + 'a') : ext[i];
+            }
+            lower[len] = '\0';
+            if (strcmp(lower, "jpg") == 0 || strcmp(lower, "jpeg") == 0 || strcmp(lower, "png") == 0 ||
+                strcmp(lower, "gif") == 0 || strcmp(lower, "webp") == 0 || strcmp(lower, "bmp") == 0) {
+                ProbeOutside.extImage++;
+            } else if (strcmp(lower, "plist") == 0) {
+                ProbeOutside.extPlist++;
+            } else if (strcmp(lower, "db") == 0 || strcmp(lower, "sqlite") == 0 ||
+                       strcmp(lower, "sqlite3") == 0 || strcmp(lower, "dat") == 0) {
+                ProbeOutside.extDatabase++;
+            } else if (strcmp(lower, "config") == 0 || strcmp(lower, "json") == 0 ||
+                       strcmp(lower, "xml") == 0 || strcmp(lower, "ini") == 0 ||
+                       strcmp(lower, "conf") == 0) {
+                ProbeOutside.extConfig++;
+            } else {
+                ProbeOutside.extOther++;
+            }
+        }
+        if (ProbeLooksLikeSecurityName(base)) {
+            BOOL known = NO;
+            for (unsigned int i = 0; i < ProbeOutside.securityNameCount; i++) {
+                if (strcmp(ProbeOutside.securityNames[i], base) == 0) { known = YES; break; }
+            }
+            if (!known) {
+                if (ProbeOutside.securityNameCount < (unsigned int)ProbeSecurityNameLimit) {
+                    snprintf(ProbeOutside.securityNames[ProbeOutside.securityNameCount],
+                        ProbeSecurityNameSize, "%s", base);
+                    ProbeOutside.securityNameCount++;
+                } else {
+                    ProbeOutside.securityNameOverflow = YES;
+                }
+            }
+        }
+    } else {
+        ProbeOutside.other++;
+        // 无路径可归类时，目录类别计入 other、扩展名计入 extNone，
+        // 保证「各类别之和 == total」这个不变量在两组分类里都成立，
+        // 否则桩测试的求和断言会失败。
+        ProbeOutside.extNone++;
+    }
+}
+
 static void ProbeTallyLocked(ProbeHostChannelIndex channel, const char *full, NSString *path,
         int matched, NSData *content) {
     ProbeHostRecord *record = &ProbeHost[channel];
@@ -295,6 +410,9 @@ static void ProbeTallyLocked(ProbeHostChannelIndex channel, const char *full, NS
         if (content != nil) ProbeRecordScopedContentLocked(path, content, ProbeHostChannelNames[channel]);
     } else {
         record->outside++;
+        // full 可能为 NULL（例如 Bundle 解析失败、URL 不是 file://）；
+        // ProbeRecordOutsideLocked 会把无路径的情况计入 other。
+        ProbeRecordOutsideLocked(full);
     }
 }
 
@@ -348,7 +466,13 @@ static void ProbeObserveFd(ProbeHostChannelIndex channel, int fd) {
     }
     ProbeHostRecord *record = &ProbeHost[channel];
     record->calls++;
-    if (!ProbeFdCache[slot].resolved) { record->outside++; pthread_mutex_unlock(&ProbeTraceMutex); return; }
+    // F_GETPATH 失败时没有路径可归类，计入 other；不得伪造成某个目录类别。
+    if (!ProbeFdCache[slot].resolved) {
+        record->outside++;
+        ProbeRecordOutsideLocked(NULL);
+        pthread_mutex_unlock(&ProbeTraceMutex);
+        return;
+    }
     const char *full = ProbeFdCache[slot].path;
     NSString *text = [NSString stringWithUTF8String:full];
     ProbeTallyLocked(channel, full, text, -2, nil);
@@ -904,6 +1028,18 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
     memset(&ProbeCanary, 0, sizeof(ProbeCanary));
     memset(ProbeHost, 0, sizeof(ProbeHost));
     memset(ProbeFdCache, 0, sizeof(ProbeFdCache));
+    memset(&ProbeOutside, 0, sizeof(ProbeOutside));
+    pthread_mutex_unlock(&ProbeTraceMutex);
+    // app bundle 前缀在锁外取值（要调 ObjC），只用于把目录外访问归类，不记录完整路径。
+    NSString *bundlePath = NSBundle.mainBundle.bundlePath;
+    const char *bundlePrefix = bundlePath.fileSystemRepresentation;
+    pthread_mutex_lock(&ProbeTraceMutex);
+    ProbeAppBundlePrefix[0] = '\0';
+    ProbeAppBundlePrefixLength = 0;
+    if (bundlePrefix && bundlePrefix[0]) {
+        snprintf(ProbeAppBundlePrefix, sizeof(ProbeAppBundlePrefix), "%s", bundlePrefix);
+        ProbeAppBundlePrefixLength = strlen(ProbeAppBundlePrefix);
+    }
     pthread_mutex_unlock(&ProbeTraceMutex);
     pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
     if (!ProbeOriginalFopen || !ProbeOriginalOpen) return NO;
@@ -1076,6 +1212,9 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
     ProbeCanaryPath[0] = '\0';
     memset(&ProbeCanary, 0, sizeof(ProbeCanary));
     memset(ProbeFdCache, 0, sizeof(ProbeFdCache));
+    // ProbeOutside 必须与 ProbeHost 一起清零：自检阶段也会产生目录外访问，
+    // 不清就会把探针自己的 I/O 冒充成 SDK 的行为。ProbeAppBundlePrefix 是配置不是计数，保留。
+    memset(&ProbeOutside, 0, sizeof(ProbeOutside));
     // 清零计数但保留 selfChecked，供报告标注每条通道是否可信。
     for (int i = 0; i < ProbeHostChannelCount; i++) {
         BOOL checked = ProbeHost[i].selfChecked;
@@ -1129,6 +1268,7 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
     unsigned int markCount = ProbeStageMarkCount;
     ProbeHostRecord host[ProbeHostChannelCount];
     memcpy(host, ProbeHost, sizeof(host));
+    ProbeOutsideRecord outside = ProbeOutside;
     memset(ProbeFiles, 0, sizeof(ProbeFiles));
     memset(ProbeScopedFiles, 0, sizeof(ProbeScopedFiles));
     ProbeScopedFileCount = 0;
@@ -1137,6 +1277,7 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
     ProbeStageMarkCount = 0;
     memset(ProbeHost, 0, sizeof(ProbeHost));
     memset(ProbeFdCache, 0, sizeof(ProbeFdCache));
+    memset(&ProbeOutside, 0, sizeof(ProbeOutside));
     ProbeTraceOptions = CampusProbeTraceOptionsTargetsOnly;
     pthread_mutex_unlock(&ProbeTraceMutex);
     if (!wasActive) return @[];
@@ -1161,6 +1302,36 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
                     record->selfChecked ? @"自检命中" : @"自检未命中（本通道结果不可信）",
                     record->calls, record->target, record->targetSame, record->targetDiff,
                     record->scoped, record->outside]}];
+        }
+        // 目录外访问归类：只给粗粒度类别计数，不含任何路径。
+        [rows addObject:@{@"step": @"目录外访问归类",
+            @"result": [NSString stringWithFormat:
+                @"合计 %u；应用包内 %u；临时目录 %u；用户目录 %u；系统目录 %u；其它 %u",
+                outside.total, outside.appBundle, outside.temp, outside.home,
+                outside.system, outside.other]}];
+        // 扩展名直方图：回答“SDK 是否在别处寻找图片/配置/数据库”，只给类别不给文件名。
+        [rows addObject:@{@"step": @"目录外访问扩展名",
+            @"result": [NSString stringWithFormat:
+                @"图片 %u；plist %u；数据库/dat %u；配置(json/xml/config) %u；无扩展名 %u；其它 %u",
+                outside.extImage, outside.extPlist, outside.extDatabase, outside.extConfig,
+                outside.extNone, outside.extOther]}];
+        // 只列出匹配 SecurityGuard 安全资源命名域（yw_*/mwua/jaq）的 basename，
+        // 用于回答“SDK 到底在找哪个文件名的安全图片”。不按 .jpg 扩展名匹配，
+        // 否则窗口内访问到的用户照片名会进入报告。其余文件名一律不记录。
+        if (outside.securityNameCount > 0) {
+            NSMutableArray<NSString *> *names = [NSMutableArray array];
+            for (unsigned int index = 0; index < outside.securityNameCount; index++) {
+                [names addObject:[NSString stringWithUTF8String:outside.securityNames[index]]];
+            }
+            [rows addObject:@{@"step": @"目录外安全资源命名",
+                @"result": [NSString stringWithFormat:@"观察到 %u 个：%@",
+                    outside.securityNameCount, [names componentsJoinedByString:@"、"]]}];
+        } else {
+            [rows addObject:@{@"step": @"目录外安全资源命名",
+                @"result": @"窗口内未观察到匹配 yw_*/mwua/jaq 命名的目录外访问"}];
+        }
+        if (outside.securityNameOverflow) {
+            [rows addObject:@{@"step": @"目录外安全资源命名", @"result": @"名称已达上限，后续未记录"}];
         }
     }
     for (unsigned int index = 0; index < markCount; index++) {
