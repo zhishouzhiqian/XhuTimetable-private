@@ -7,7 +7,9 @@
 1. tools/ios-component-probe/*.h 里声明的 CampusProbe* C 函数必须有定义；
 2. 每个工具目录里的 .m 文件都必须被 tools/build_campus_ios_probe.sh 编译并链接；
 3. 诊断入口必须在头文件、实现、Swift 调用三处同时存在；
-4. 正式入口的资源完整性门槛与「不展示路径」的既有约束仍在。
+4. 正式入口的资源完整性门槛与「不展示路径」的既有约束仍在；
+5. 源文件用到的 C 标识符必须有对应的 #include（本机无 Xcode，这是唯一能在
+   CI 编译前拦住「用了 DIR 却漏了 <dirent.h>」这类回归的手段）。
 
 用法：python tools/check_campus_probe_wiring.py
 退出码 0 表示全部通过，1 表示存在不一致。
@@ -173,6 +175,46 @@ def check_brace_balance():
                 fail("{} 括号不平衡：{} 与 {} 相差 {}".format(relative, opener, closer, delta))
 
 
+def check_header_dependencies():
+    """C/ObjC 源文件的标识符依赖必须来自已 include 的头。
+
+    这是 bc59d50 在 CI 上编译失败的直接教训：重写 ProbeResourceTrace.m 时丢掉了
+    #include <dirent.h>，导致 DIR/opendir/closedir 全部未声明。本机无 Xcode，
+    这类错误只能靠文本级审计在编译前拦住。只维护实际用到的最小映射表，
+    宁可漏报也不误报（误报会阻塞 CI）。
+    """
+    # 标识符 -> 必须存在的 include（满足其一即可）。
+    required = [
+        (r'\bDIR\s*\*|\bopendir\s*\(|\bclosedir\s*\(|\breaddir\s*\(', '<dirent.h>'),
+        (r'\bpthread_mutex_lock\s*\(|\bpthread_once\s*\(', '<pthread.h>'),
+        (r'\bdlsym\s*\(|\bRTLD_NEXT\b', '<dlfcn.h>'),
+        (r'\bva_start\s*\(|\bva_arg\s*\(', '<stdarg.h>'),
+        (r'\berrno\b', '<errno.h>'),
+        (r'\bCC_SHA256\s*\(', '<CommonCrypto/CommonDigest.h>'),
+        (r'\bIMP\b|\bclass_getInstanceMethod\s*\(|\bmethod_setImplementation\s*\(', '<objc/runtime.h>'),
+        (r'\bO_RDONLY\b|\bO_CREAT\b', '<fcntl.h>'),
+        (r'\bstruct stat\b|\bfstat\s*\(|\bstat\s*\(', '<sys/stat.h>'),
+        (r'\bfopen\s*\(|\bsnprintf\s*\(|\bfileno\s*\(', '<stdio.h>'),
+        (r'\bmemcmp\s*\(|\bstrlen\s*\(|\bmemset\s*\(|\bstrcmp\s*\(', '<string.h>'),
+        (r'\bmalloc\s*\(|\bfree\s*\(', '<stdlib.h>'),
+        (r'\bclose\s*\(|\blseek\s*\(|\baccess\s*\(|\bunlink\s*\(|\bgetpid\s*\(', '<unistd.h>'),
+    ]
+    for path in sorted(TOOLS.glob('*.m')) + sorted(APP.glob('*.m')):
+        text = read(path)
+        # 去掉字符串字面量与注释，避免把文案里的词当成标识符使用。
+        text = re.sub(r'/\*.*?\*/', ' ', text, flags=re.S)
+        text = re.sub(r'//[^\n]*', ' ', text)
+        text = re.sub(r'"(?:\\.|[^"\\])*"', '""', text)
+        included = set(re.findall(r'#\s*(?:include|import)\s*[<"]([^>"]+)[>"]', text))
+        for pattern, header in required:
+            if re.search(pattern, text):
+                name = header.strip('<>')
+                # 允许包含更具体的子路径（例如 CommonCrypto/CommonDigest.h）。
+                if not any(item == name or item.endswith('/' + name) for item in included):
+                    fail('{} 使用了 {} 相关标识符但未 include {}'.format(
+                        path.name, name, header))
+
+
 def check_host_channels():
     """宿主通道观察的接线：选项、拦截入口、诊断启用、自检标注四处必须同时存在。"""
     header = read(TOOLS / "ProbeResourceTrace.h")
@@ -210,6 +252,17 @@ def check_host_channels():
     if 'PROBE_STAT_SYMBOL' not in implementation or \
             '"stat$INODE64"' not in implementation:
         fail("ProbeResourceTrace.m 缺少 stat 的 $INODE64 同代符号处理")
+    # 定义侧也要带同一 asm 标签，否则 x86_64 上定义与头文件声明会分裂成两个符号。
+    for definition in ["int stat(const char *restrict path, struct stat *restrict sb)",
+                       "int lstat(const char *restrict path, struct stat *restrict sb)",
+                       "int fstat(int fd, struct stat *sb)"]:
+        index = implementation.find(definition)
+        if index < 0:
+            fail("ProbeResourceTrace.m 缺少定义：{}".format(definition))
+            continue
+        tail = implementation[index:index + len(definition) + 40]
+        if "PROBE_INODE64(" not in tail:
+            fail("{} 的定义缺少 PROBE_INODE64 标签".format(definition.split("(")[0].strip()))
     if "CampusProbeTraceOptionsHostChannels" not in probe:
         fail("诊断入口没有启用宿主通道观察")
     # 自检判据必须同时接受 target 与 scoped：opendir/目录枚举只能命中 scoped，
@@ -237,6 +290,7 @@ def main():
     check_build_script()
     check_diagnostics_entry()
     check_host_channels()
+    check_header_dependencies()
     check_report_hygiene()
     check_brace_balance()
     if failures:

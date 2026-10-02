@@ -170,46 +170,25 @@ static BOOL ParseHostRow(NSString *text, ProbeHostReport *out) {
     if (text.length == 0) return NO;
     ProbeHostReport value = {0};
     value.selfChecked = [text hasPrefix:@"自检命中"];
-    NSScanner *scanner = [NSScanner scannerWithString:text];
-    unsigned int field = 0;
-    if (![scanner scanString:@"自检" intoString:NULL]) return NO;
-    // 跳过自检状态描述，定位到「调用 N」。
+    // NSScanner 的 scanInt: 只接受 int*；报告字段是 unsigned int，
+    // 直接取地址强制转换会造成指针类型不匹配，故用 int 承接后再收窄。
+    int parsed = 0;
     NSRange anchor = [text rangeOfString:@"调用 "];
     if (anchor.location == NSNotFound) return NO;
-    scanner = [NSScanner scannerWithString:[text substringFromIndex:anchor.location]];
-    if (![scanner scanString:@"调用 " intoString:NULL]) return NO;
-    if (![scanner scanInt:(int *)&field]) return NO;
-    value.calls = field;
-    NSRange targetAnchor = [text rangeOfString:@"目标命中 "];
-    if (targetAnchor.location == NSNotFound) return NO;
-    scanner = [NSScanner scannerWithString:[text substringFromIndex:targetAnchor.location]];
-    if (![scanner scanString:@"目标命中 " intoString:NULL] ||
-        ![scanner scanInt:(int *)&field]) return NO;
-    value.target = field;
-    NSRange sameAnchor = [text rangeOfString:@"内容一致 "];
-    if (sameAnchor.location == NSNotFound) return NO;
-    scanner = [NSScanner scannerWithString:[text substringFromIndex:sameAnchor.location]];
-    if (![scanner scanString:@"内容一致 " intoString:NULL] ||
-        ![scanner scanInt:(int *)&field]) return NO;
-    value.targetSame = field;
-    NSRange diffAnchor = [text rangeOfString:@"，不同 "];
-    if (diffAnchor.location == NSNotFound) return NO;
-    scanner = [NSScanner scannerWithString:[text substringFromIndex:diffAnchor.location]];
-    if (![scanner scanString:@"，不同 " intoString:NULL] ||
-        ![scanner scanInt:(int *)&field]) return NO;
-    value.targetDiff = field;
-    NSRange scopedAnchor = [text rangeOfString:@"目录内 "];
-    if (scopedAnchor.location == NSNotFound) return NO;
-    scanner = [NSScanner scannerWithString:[text substringFromIndex:scopedAnchor.location]];
-    if (![scanner scanString:@"目录内 " intoString:NULL] ||
-        ![scanner scanInt:(int *)&field]) return NO;
-    value.scoped = field;
-    NSRange outsideAnchor = [text rangeOfString:@"目录外 "];
-    if (outsideAnchor.location == NSNotFound) return NO;
-    scanner = [NSScanner scannerWithString:[text substringFromIndex:outsideAnchor.location]];
-    if (![scanner scanString:@"目录外 " intoString:NULL] ||
-        ![scanner scanInt:(int *)&field]) return NO;
-    value.outside = field;
+    NSScanner *scanner = [NSScanner scannerWithString:[text substringFromIndex:anchor.location]];
+    if (![scanner scanString:@"调用 " intoString:NULL] || ![scanner scanInt:&parsed]) return NO;
+    value.calls = (unsigned int)parsed;
+    const char *labels[] = {"目标命中 ", "内容一致 ", "，不同 ", "目录内 ", "目录外 "};
+    unsigned int *targets[] = {&value.target, &value.targetSame, &value.targetDiff,
+        &value.scoped, &value.outside};
+    for (unsigned int index = 0; index < sizeof(labels) / sizeof(labels[0]); index++) {
+        NSString *label = [NSString stringWithUTF8String:labels[index]];
+        NSRange range = [text rangeOfString:label];
+        if (range.location == NSNotFound) return NO;
+        scanner = [NSScanner scannerWithString:[text substringFromIndex:range.location]];
+        if (![scanner scanString:label intoString:NULL] || ![scanner scanInt:&parsed]) return NO;
+        *targets[index] = (unsigned int)parsed;
+    }
     if (out) *out = value;
     return YES;
 }

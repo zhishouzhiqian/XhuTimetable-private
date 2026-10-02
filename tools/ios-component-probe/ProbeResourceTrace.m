@@ -1,6 +1,7 @@
 #import "ProbeResourceTrace.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <objc/runtime.h>
+#include <dirent.h>   // DIR / opendir / closedir：宿主通道的目录枚举拦截与自检
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -137,6 +138,17 @@ static pthread_once_t ProbeResolveOnce = PTHREAD_ONCE_INIT;
 #define PROBE_STAT_SYMBOL "stat"
 #define PROBE_LSTAT_SYMBOL "lstat"
 #define PROBE_FSTAT_SYMBOL "fstat"
+#endif
+
+// 定义侧同样要带 asm 标签：x86_64 的 <sys/stat.h> 声明是
+// int stat(const char *restrict, struct stat *restrict) __DARWIN_INODE64(stat);
+// 若我们的定义不加同一标签，就会与头文件声明分裂成 _stat 与 _stat$INODE64
+// 两个符号，Intel 构建机上可能报冲突、且拦不到 SDK 的调用。
+// 复用系统自己的宏：arm64（真机与 Apple Silicon CI）上它展开为空，零影响。
+#ifdef __DARWIN_INODE64
+#define PROBE_INODE64(name) __DARWIN_INODE64(name)
+#else
+#define PROBE_INODE64(name)
 #endif
 
 static void ProbeResolveFopen(void) {
@@ -463,9 +475,14 @@ DIR *opendir(const char *path) {
     return handle;
 }
 
-// 签名与 <sys/stat.h> 的声明保持一致：Darwin 对 stat 与 lstat 的两个参数都带 __restrict，
-// fstat 不带。C 的类型兼容判定会忽略参数限定符，故 restrict 只影响告警、不影响链接。
-int stat(const char *restrict path, struct stat *restrict sb) {
+// 签名与 <sys/stat.h> 的声明保持一致：Darwin 声明为
+//   int stat (const char *__restrict, struct stat *__restrict) __DARWIN_INODE64(stat);
+//   int lstat(const char *__restrict, struct stat *__restrict) __DARWIN_INODE64(lstat);
+//   int fstat(int, struct stat *)                             __DARWIN_INODE64(fstat);
+// 即 stat/lstat 两个参数都带 restrict，fstat 一个都不带。C 的类型兼容判定会忽略参数
+// 限定符，故 restrict 只影响告警、不影响链接。
+// PROBE_INODE64 使定义与声明落到同一符号名（arm64 上该宏展开为空）。
+int stat(const char *restrict path, struct stat *restrict sb) PROBE_INODE64(stat) {
     int before = errno;
     pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
     if (!ProbeOriginalStat) { errno = ENOSYS; return -1; }
@@ -477,7 +494,7 @@ int stat(const char *restrict path, struct stat *restrict sb) {
     return result;
 }
 
-int lstat(const char *restrict path, struct stat *restrict sb) {
+int lstat(const char *restrict path, struct stat *restrict sb) PROBE_INODE64(lstat) {
     int before = errno;
     pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
     if (!ProbeOriginalLstat) { errno = ENOSYS; return -1; }
@@ -501,7 +518,7 @@ off_t lseek(int fd, off_t offset, int whence) {
     return result;
 }
 
-int fstat(int fd, struct stat *sb) {
+int fstat(int fd, struct stat *sb) PROBE_INODE64(fstat) {
     int before = errno;
     pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
     if (!ProbeOriginalFstat) { errno = ENOSYS; return -1; }
@@ -983,15 +1000,17 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
             NSString *baseName = path.lastPathComponent.stringByDeletingPathExtension;
             NSString *extension = path.pathExtension;
             NSURL *fileURL = [NSURL fileURLWithPath:path];
+            // 自检的目的只是让每条拦截都真的被触发一次，返回值本身不需要使用。
+            // clang 对 init 族方法的未使用结果会报 -Wunused-value，故显式 (void) 丢弃。
             [NSData dataWithContentsOfFile:path];
             [NSData dataWithContentsOfFile:path options:0 error:NULL];
             [NSData dataWithContentsOfURL:fileURL];
-            [[NSData alloc] initWithContentsOfFile:path];
-            [[NSData alloc] initWithContentsOfFile:path options:0 error:NULL];
-            [[NSData alloc] initWithContentsOfURL:fileURL];
+            (void)[[NSData alloc] initWithContentsOfFile:path];
+            (void)[[NSData alloc] initWithContentsOfFile:path options:0 error:NULL];
+            (void)[[NSData alloc] initWithContentsOfURL:fileURL];
             [NSString stringWithContentsOfFile:path encoding:NSISOLatin1StringEncoding error:NULL];
-            [[NSString alloc] initWithContentsOfFile:path encoding:NSISOLatin1StringEncoding error:NULL];
-            [[NSString alloc] initWithContentsOfFile:path usedEncoding:NULL error:NULL];
+            (void)[[NSString alloc] initWithContentsOfFile:path encoding:NSISOLatin1StringEncoding error:NULL];
+            (void)[[NSString alloc] initWithContentsOfFile:path usedEncoding:NULL error:NULL];
             NSFileManager *manager = [NSFileManager defaultManager];
             [manager contentsAtPath:path];
             [manager fileExistsAtPath:path];
