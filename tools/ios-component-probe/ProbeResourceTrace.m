@@ -140,16 +140,11 @@ static pthread_once_t ProbeResolveOnce = PTHREAD_ONCE_INIT;
 #define PROBE_FSTAT_SYMBOL "fstat"
 #endif
 
-// 定义侧同样要带 asm 标签：x86_64 的 <sys/stat.h> 声明是
-// int stat(const char *restrict, struct stat *restrict) __DARWIN_INODE64(stat);
-// 若我们的定义不加同一标签，就会与头文件声明分裂成 _stat 与 _stat$INODE64
-// 两个符号，Intel 构建机上可能报冲突、且拦不到 SDK 的调用。
-// 复用系统自己的宏：arm64（真机与 Apple Silicon CI）上它展开为空，零影响。
-#ifdef __DARWIN_INODE64
-#define PROBE_INODE64(name) __DARWIN_INODE64(name)
-#else
-#define PROBE_INODE64(name)
-#endif
+// 不在定义侧加 __DARWIN_INODE64 标签：真机目标是 arm64，IR 已核对 SGMain 引用的是
+// 纯 _stat/_lstat（$INODE64 计数 0），该宏在 arm64 上本就展开为空，加了纯属多余；
+// 实测 clang 会在定义处报 “expected ';' after top level declarator”。
+// x86_64 macOS 桩测试环境下 stat 通道可能因头文件重定向而不命中，
+// 已由 ProbeTests.m 的 PROBE_STAT_INODE64_REDIRECT 豁免，不影响真机结论。
 
 static void ProbeResolveFopen(void) {
     ProbeOriginalFopen = (FILE *(*)(const char *, const char *))dlsym(RTLD_NEXT, "fopen");
@@ -476,13 +471,12 @@ DIR *opendir(const char *path) {
 }
 
 // 签名与 <sys/stat.h> 的声明保持一致：Darwin 声明为
-//   int stat (const char *__restrict, struct stat *__restrict) __DARWIN_INODE64(stat);
-//   int lstat(const char *__restrict, struct stat *__restrict) __DARWIN_INODE64(lstat);
-//   int fstat(int, struct stat *)                             __DARWIN_INODE64(fstat);
+//   int stat (const char *__restrict, struct stat *__restrict);
+//   int lstat(const char *__restrict, struct stat *__restrict);
+//   int fstat(int, struct stat *);
 // 即 stat/lstat 两个参数都带 restrict，fstat 一个都不带。C 的类型兼容判定会忽略参数
 // 限定符，故 restrict 只影响告警、不影响链接。
-// PROBE_INODE64 使定义与声明落到同一符号名（arm64 上该宏展开为空）。
-int stat(const char *restrict path, struct stat *restrict sb) PROBE_INODE64(stat) {
+int stat(const char *restrict path, struct stat *restrict sb) {
     int before = errno;
     pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
     if (!ProbeOriginalStat) { errno = ENOSYS; return -1; }
@@ -494,7 +488,7 @@ int stat(const char *restrict path, struct stat *restrict sb) PROBE_INODE64(stat
     return result;
 }
 
-int lstat(const char *restrict path, struct stat *restrict sb) PROBE_INODE64(lstat) {
+int lstat(const char *restrict path, struct stat *restrict sb) {
     int before = errno;
     pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
     if (!ProbeOriginalLstat) { errno = ENOSYS; return -1; }
@@ -518,7 +512,7 @@ off_t lseek(int fd, off_t offset, int whence) {
     return result;
 }
 
-int fstat(int fd, struct stat *sb) PROBE_INODE64(fstat) {
+int fstat(int fd, struct stat *sb) {
     int before = errno;
     pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
     if (!ProbeOriginalFstat) { errno = ENOSYS; return -1; }
@@ -578,7 +572,7 @@ static BOOL (*ProbeOriginalFileManagerFileExistsIsDirectory)(id, SEL, NSString *
 static id (*ProbeOriginalFileManagerAttributes)(id, SEL, NSString *, NSError **);
 static id (*ProbeOriginalFileManagerContentsOfDirectory)(id, SEL, NSString *, NSError **);
 static id (*ProbeOriginalFileHandleForReading)(id, SEL, NSString *);
-static id (*ProbeOriginalFileHandleForReadingError)(id, SEL, NSString *, NSError **);
+static id (*ProbeOriginalFileHandleForReadingFromURLError)(id, SEL, id, NSError **);
 static NSString *(*ProbeOriginalBundlePathForResource)(id, SEL, NSString *, NSString *);
 static NSString *(*ProbeOriginalBundlePathForResourceInDirectory)(id, SEL, NSString *, NSString *, NSString *);
 static id (*ProbeOriginalBundleWithURL)(id, SEL, id);
@@ -720,11 +714,15 @@ static id ProbeFileHandleForReading(id self, SEL selector, NSString *path) {
     return result;
 }
 
-static id ProbeFileHandleForReadingError(id self, SEL selector, NSString *path, NSError **error) {
+// 注意：Foundation 没有 +fileHandleForReadingAtPath:error: 这个 selector（真实 API 是
+// +fileHandleForReadingFromURL:error:）。安装不存在的 selector 会让
+// ProbeInstallHostInterceptors 返回 NO、整个窗口判无效，因此这里用 URL 变体，
+// 既覆盖真实 API，也顺带观察 URL 形态的文件句柄创建。
+static id ProbeFileHandleForReadingFromURLError(id self, SEL selector, id url, NSError **error) {
     ProbeHostDepth++;
-    id result = ProbeOriginalFileHandleForReadingError(self, selector, path, error);
+    id result = ProbeOriginalFileHandleForReadingFromURLError(self, selector, url, error);
     ProbeHostDepth--;
-    ProbeRecordHost(ProbeHostChannelFileHandle, path, -2, nil);
+    ProbeRecordHost(ProbeHostChannelFileHandle, ProbePathFromURL(url), -2, nil);
     return result;
 }
 
@@ -832,8 +830,8 @@ static BOOL ProbeInstallHostInterceptors(void) {
         (IMP)ProbeFileManagerContentsOfDirectory, (IMP *)&ProbeOriginalFileManagerContentsOfDirectory);
     complete = complete && ProbeInstallInterceptor(object_getClass(NSFileHandle.class), @selector(fileHandleForReadingAtPath:),
         (IMP)ProbeFileHandleForReading, (IMP *)&ProbeOriginalFileHandleForReading);
-    complete = complete && ProbeInstallInterceptor(object_getClass(NSFileHandle.class), @selector(fileHandleForReadingAtPath:error:),
-        (IMP)ProbeFileHandleForReadingError, (IMP *)&ProbeOriginalFileHandleForReadingError);
+    complete = complete && ProbeInstallInterceptor(object_getClass(NSFileHandle.class), @selector(fileHandleForReadingFromURL:error:),
+        (IMP)ProbeFileHandleForReadingFromURLError, (IMP *)&ProbeOriginalFileHandleForReadingFromURLError);
     complete = complete && ProbeInstallInterceptor(NSBundle.class, @selector(pathForResource:ofType:),
         (IMP)ProbeBundlePathForResource, (IMP *)&ProbeOriginalBundlePathForResource);
     complete = complete && ProbeInstallInterceptor(NSBundle.class, @selector(pathForResource:ofType:inDirectory:),
@@ -1018,7 +1016,7 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
             [manager fileExistsAtPath:path isDirectory:&isDirectory];
             [manager attributesOfItemAtPath:path error:NULL];
             [NSFileHandle fileHandleForReadingAtPath:path];
-            [NSFileHandle fileHandleForReadingAtPath:path error:NULL];
+            [NSFileHandle fileHandleForReadingFromURL:fileURL error:NULL];
             [NSBundle.mainBundle pathForResource:baseName ofType:extension];
             [NSBundle.mainBundle pathForResource:baseName ofType:extension inDirectory:nil];
             access(cpath, F_OK);

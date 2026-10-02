@@ -18,8 +18,17 @@ static NSString *CampusMtopProbeSignData(NSData *body, NSString *utdid, NSString
     for (NSString *key in optional) {
         if (headers[key] && ![headers[key] isKindOfClass:NSString.class]) return nil;
     }
+    // MTOP 签名契约要求正文取 MD5（字段顺序与摘要算法都来自天猫校园 iOS 5.7.2 的
+    // TBSDkSignUtility），换成 SHA256 会直接破坏与服务端的签名兼容。这里的 MD5 只用于
+    // 复现厂商既定的签名串格式，不承担机密性或完整性保护，因此不属于 clang 警告所指的
+    // “安全上下文”。抑制告警以免后来者按警告文案“修复”而破坏协议；
+    // ProbeTests.m 的 CheckInputContract 用 MD5("{}")=99914b932bd37a50b983c5e7c90ae93b
+    // 锁定了这一行为，改动会立刻让桩测试失败。
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
     unsigned char digest[CC_MD5_DIGEST_LENGTH];
     CC_MD5(body.bytes, (CC_LONG)body.length, digest);
+#pragma clang diagnostic pop
     NSMutableString *md5 = [NSMutableString string];
     for (NSUInteger i = 0; i < sizeof(digest); i++) [md5 appendFormat:@"%02x", digest[i]];
     NSArray *location = [headers[@"x-location"] componentsSeparatedByString:@","];

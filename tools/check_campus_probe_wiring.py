@@ -252,17 +252,16 @@ def check_host_channels():
     if 'PROBE_STAT_SYMBOL' not in implementation or \
             '"stat$INODE64"' not in implementation:
         fail("ProbeResourceTrace.m 缺少 stat 的 $INODE64 同代符号处理")
-    # 定义侧也要带同一 asm 标签，否则 x86_64 上定义与头文件声明会分裂成两个符号。
-    for definition in ["int stat(const char *restrict path, struct stat *restrict sb)",
-                       "int lstat(const char *restrict path, struct stat *restrict sb)",
-                       "int fstat(int fd, struct stat *sb)"]:
-        index = implementation.find(definition)
-        if index < 0:
+    # 三个 stat 系定义必须存在，且不得带 __DARWIN_INODE64 标签：真机是 arm64（IR 已核对
+    # 为纯 _stat），该宏在 arm64 上展开为空、加了纯属多余，且实测会让 clang 在定义处
+    # 报 “expected ';' after top level declarator”。
+    for definition in ["int stat(const char *restrict path, struct stat *restrict sb) {",
+                       "int lstat(const char *restrict path, struct stat *restrict sb) {",
+                       "int fstat(int fd, struct stat *sb) {"]:
+        if definition not in implementation:
             fail("ProbeResourceTrace.m 缺少定义：{}".format(definition))
-            continue
-        tail = implementation[index:index + len(definition) + 40]
-        if "PROBE_INODE64(" not in tail:
-            fail("{} 的定义缺少 PROBE_INODE64 标签".format(definition.split("(")[0].strip()))
+    if "PROBE_INODE64(" in implementation:
+        fail("stat 系定义不得带 PROBE_INODE64 标签（arm64 上多余且导致编译失败）")
     if "CampusProbeTraceOptionsHostChannels" not in probe:
         fail("诊断入口没有启用宿主通道观察")
     # 自检判据必须同时接受 target 与 scoped：opendir/目录枚举只能命中 scoped，
@@ -276,6 +275,41 @@ def check_host_channels():
         implementation.index("BOOL valid =")):]
     if "valid = valid && record->selfChecked" in host_block:
         fail("宿主通道自检不得否决窗口有效性")
+    # 每个被安装的 selector 都必须在自检块里被真实调用一次。
+    # 这条断言防的是一类静默失败：selector 拼错时 ProbeInstallInterceptor 会返回 NO，
+    # 进而 ProbeInstallHostInterceptors 返回 NO、整个窗口判无效——真机一轮直接作废，
+    # 且报告只会说“拦截安装失败”，看不出是哪个 selector 拼错了。只要自检块调用了它，
+    # 拼错的 selector 会在编译期就报错（本轮 fileHandleForReadingAtPath:error: 正是
+    # 这样被拦下的），把运行期静默失败前移成编译期硬错误。
+    installed = re.findall(r'ProbeInstallInterceptor\([^;]*?@selector\(([^)]*)\)', implementation)
+    if not installed:
+        fail("ProbeResourceTrace.m 没有安装任何拦截器")
+    self_check_start = implementation.find("// 宿主通道同样需要自检")
+    if self_check_start < 0:
+        fail("找不到宿主通道自检块，无法核对 selector 是否被触发")
+    else:
+        self_check_block = implementation[self_check_start:]
+
+        def selector_called(selector):
+            """自检块里是否按顺序出现了该 selector 的每一段（形如 name:）。
+
+            不用 [obj a:b:] 的整体正则：实例方法常写成 [[NSData alloc] init...]，
+            嵌套方括号会让「不允许跨越方括号」的模式失配，造成误报。
+            按段顺序查找足够严格，且不会因括号嵌套而漏判。
+            """
+            position = 0
+            for part in selector.split(':'):
+                if not part:
+                    continue
+                index = self_check_block.find(part + ':', position)
+                if index < 0:
+                    return False
+                position = index + len(part) + 1
+            return True
+
+        for selector in installed:
+            if not selector_called(selector):
+                fail("已安装的 selector {} 未在自检块中被调用（拼错会导致窗口静默失效）".format(selector))
     tests = read(TOOLS / "ProbeTests.m")
     if "CheckHostChannelTrace" not in tests:
         fail("桩测试缺少宿主通道场景 CheckHostChannelTrace")
