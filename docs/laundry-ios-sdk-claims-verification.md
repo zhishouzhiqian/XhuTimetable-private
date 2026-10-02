@@ -81,9 +81,48 @@ AppKey 包装层命令为 `10902`；底层错误加 `200`，所以 `204` 对应�
 
 同代 SDK、配套资源和校园服务端授权属于不同条件；取得某一条件不代表其他条件自动满足。Android 签名或后端代理也尚未验证 iOS 会话建立，不能作为已经可交付的修复。
 
+## AppKey 分发链的进一步核对
+
+在候选 SGMain 的可解析 bitcode 中，命令入口 `CMa02JYdt11b9o` 把 `10902` 拆成 `(1, 9, 2)`，以标志 `1` 交给 `CMa02G3LDtYwUT`。初始化命令 `10501` 对应 `(1, 5, 1)`。
+
+该分发函数包含两种路径：虚拟化方法查询与原生注册表查询。虚拟化查询编号的计算式为 `66000000 + group * 10000 + middle * 100 + sub`；AppKey 对应 `66010902`。如果虚拟化查询标记为已处理，函数直接返回该结果；否则查询对应标志的原生函数表。存在这些分支不等于已经证明本次真机运行选择了哪一条。
+
+AppKey 原生注册 `(1, 9, 2, 1)` 对应 `CMa02WYLvRCbzL`，其继续转发到 `(1, 6, 43, 0)`。相同编号但标志为 `0` 的 `(1, 9, 2, 0)` 对应 `CMa02XmFtsZTeQ`，它是索引提供器调用，不能把它误当作 AppKey 的图片解析器。
+
+目前 `(1, 6, 43, 0)` 在**四个 framework 的原生注册表里都没有处理器**（`tools/audit_sg_appkey_dispatch.py` 复核，注册形状 `(i32 1, i32 6, i32 43, i32 [01], ptr @CM…)` 零命中）。结合 `CMa02G3LDtYwUT` 的分发结构——先做虚拟化查询（AppKey 对应合成键 `66010643`），命中即返回，未命中才查原生表——可判定：`(1, 6, 43, 0)` 的实现**只可能来自 AVMP/uvm 字节码**，不是原生函数。直接全文搜索到的 fread/fopen 辅助函数因此接不进这条链。
+
+### 底层错误 3/4 的产生位置（本轮闭环）
+
+`raw` 小码的产生分两层，均已用 IR 行号确认：
+
+- **统一签名侧（SGMiddleTier）**：`CMi02Tqa0lTIP5` 经 `(1, 6, 8, 0)` 取得底层结果后，用一张 `switch` 把 `raw` 映射进 2400 段：`1→2401, 2→2402, 3→2403, 4→2404, 6→2405, 8→2409, 12→2406, default→2407`。真机观测「缺主图→2403 / 主图存在但损坏→2404」正好落在 `raw=3`（无文件）与 `raw=4`（格式/解析失败）两档。
+- **AppKey 侧（SGMain）**：`-[SecurityGuardOpenStaticDataStore getAppKey:authCode:]` 把底层 `raw` 加 `200`（IR `add nsw i32 %local36.0, 200`），故 `raw=4 → 204`。
+
+两处数值同源（`raw=4`），是同一底层错误在两个出口的视图。**但 `raw=3/4` 本身的判定分支位于 AVMP 字节码内部**：SGMain 内嵌一段 zlib 压缩的 uvm 程序（`@CMa02JaGysSpgl`，65,119 B，解压后 139,708 B，香农熵 6.15），其中**既无 `66xxxxxx` 合成键明文，也无 `(1,6,43)` 的 i32 编码**——注册键由 VM 在运行时构造，静态 IR 层不可见。因此「产生 3/4 的具体校验指令」无法只凭静态分析定位，只能靠真机宿主通道观察 + 错误码对照间接收敛（见实验协议本轮补充）。这是**边界，不是已定位**。
+
+### 为什么 fopen/open 零命中不能证明「没读文件」（本轮机制解释）
+
+审计候选 SGMain 的 AVMP/uvm 宿主函数注册表 `@CMa02yPs7JVQ0W`（165 项，`tools/audit_sg_appkey_dispatch.py` 第 3 节）：
+
+| 类别 | 宿主表内可用的入口 |
+|---|---|
+| 路径/目录探测 | `access`、`opendir`、`readdir`、`closedir`、`lseek`、`fcntl`、`fstat`、`lstat` |
+| 内容读取 | **只有 `objc_msgSend`**（调 Foundation：`NSData/NSString/NSFileManager/NSBundle` 的文件读方法） |
+| 路径拼接 | `NSHomeDirectory`、`NSSearchPathForDirectoriesInDomains`、`_NSGetExecutablePath` |
+| **不在表内** | `fopen`、`open`、`read`、`fread`、`stat` |
+
+字节码 VM 想读安全图片，**只能经 `objc_msgSend` 调 Foundation，或用 `access/lstat/opendir/readdir` 探测路径**；它根本没有 `fopen/open` 宿主入口。app 级 `fopen/open` interposer 又只覆盖自身链接命名空间（Foundation 内部读取不经它）。两者叠加，**fopen/open 零命中是必然的，与「SDK 有没有读文件」无关**。这正是上一版观察方法的原理性缺口，也解释了自检通过却全程零命中。
+
+据此本轮把诊断观察面从 `fopen/open` 扩到**宿主通道**：`ProbeResourceTrace` 新增 `CampusProbeTraceOptionsHostChannels`，用 method swizzle 拦截 `NSData dataWithContentsOfFile:`(+options:error:)、`NSString stringWithContentsOfFile:encoding:error:`、`NSFileManager contentsAtPath:/fileExistsAtPath:(isDirectory:)/attributesOfItemAtPath:error:`、`NSFileHandle fileHandleForReadingAtPath:`、`NSBundle pathForResource:ofType:`，并 interpose `access/opendir`。swizzle 对**任意调用方**（含字节码经 objc_msgSend 的调用）生效，不受链接命名空间限制——这是它比 app 级 `fopen/open` 更可能命中的根本原因。`readdir/stat/lstat` 在 Darwin 有 `$INODE64` 符号重定向（macOS 桩测试目标会把调用改写成 `readdir$INODE64` 等），拦截命中不可靠，故不列为可断言通道；目录枚举仍可由 `opendir` 命中 + Foundation 读方法覆盖。
+
+不修改返回值、不跳过安全校验、不把非空但不完整的字典判定为签名成功，这些约束保持不变。
+
 ## 本轮验证与边界
 
 - 只读调用点脚本运行成功；排除了声明和全局注册表引用对计数的干扰。
 - 复核了 Foundation 调用点的资源文件名、MainPlugin 初始化块、自定义路径传递和两个错误码包装层。
 - 仅检查可解析的 bitcode。部分对象不含有效 bitcode，间接调用和虚拟化代码不能由上述扫描完整还原。
-- 当前没有新增真机结果，不宣称已修复 `204/2404`。
+- 已收到修订 `8234c06` 的七组设备对照，结果见实验协议；`204/2404` 尚未修复，签名和服务端注册尚未验证。
+- 本轮新增 `tools/audit_sg_appkey_dispatch.py`（分发链 + raw→2400 映射 + 宿主表审计）与 `tools/audit_sg_bitcode_coverage.py`（bitcode 覆盖面）。两者在 Windows 上对本地 `build/laundry-ios-analysis` 产物运行通过；该目录不在 Git 仓库内，脚本可复现本节全部静态结论。
+- 宿主通道观察（swizzle）只经逐行复核与静态接线检查，**本机无 Xcode，未编译、未在真机运行**；能否命中仍需一轮设备对照验证（见实验协议「宿主通道对照轮」）。
+- `raw=3/4` 的具体判定指令在 AVMP 字节码内，静态不可见；本节只把根因收敛到「字节码图片解析器拒绝校园图」，未定位到具体校验指令，不宣称已证明代际不兼容为唯一原因。

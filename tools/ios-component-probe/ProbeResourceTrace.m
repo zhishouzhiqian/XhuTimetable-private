@@ -1,5 +1,7 @@
 #import "ProbeResourceTrace.h"
 #import <CommonCrypto/CommonDigest.h>
+#import <objc/runtime.h>
+#include <dirent.h>
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -25,19 +27,44 @@ typedef struct {
     char name[160];
     unsigned long long size;
     char digest12[13];
-    char entry[8];
+    char entry[16];
     int error;
     int stage;
 } ProbeScopedFile;
+
+// 宿主通道计数：AVMP/uvm 宿主函数表里可用的路径入口，以及 Foundation 读方法。
+typedef struct {
+    unsigned int calls, target, targetSame, targetDiff, scoped, outside;
+} ProbeHostRecord;
+
+typedef int ProbeHostChannelIndex;
 
 typedef struct {
     char stage[96];
     ProbeFileObservation files[2];
     unsigned int scopedCount;
     int scopedOverflow;
+    unsigned int hostTarget, hostScoped, hostOutside;
 } ProbeStageMark;
 
-enum { ProbeScopedFileLimit = 48, ProbeStageMarkLimit = 16, ProbeStageNameLimit = 96 };
+enum {
+    ProbeScopedFileLimit = 48,
+    ProbeStageMarkLimit = 16,
+    ProbeStageNameLimit = 96,
+    ProbeHostChannelNSData = 0,
+    ProbeHostChannelNSString,
+    ProbeHostChannelFileManager,
+    ProbeHostChannelFileHandle,
+    ProbeHostChannelBundle,
+    ProbeHostChannelAccess,
+    ProbeHostChannelOpendir,
+    ProbeHostChannelCount,
+};
+
+static const char *ProbeHostChannelNames[ProbeHostChannelCount] = {
+    "NSData", "NSString", "NSFileManager", "NSFileHandle", "NSBundle",
+    "access", "opendir",
+};
 
 static const char *ProbeNames[] = {"yw_1222.jpg", "yw_1222_mwua.jpg"};
 static char ProbeCanaryPath[1024];
@@ -52,16 +79,23 @@ static ProbeStageMark ProbeStageMarks[ProbeStageMarkLimit];
 static unsigned int ProbeStageMarkCount;
 static char ProbeScopeRoot[1024];
 static size_t ProbeScopeRootLength;
+static ProbeHostRecord ProbeHost[ProbeHostChannelCount];
 static pthread_mutex_t ProbeTraceMutex = PTHREAD_MUTEX_INITIALIZER;
 static _Thread_local unsigned int ProbeOpenDepth;
 static _Thread_local unsigned int ProbeInternalReadDepth;
+// Foundation 读方法执行期间抑制 C 层入口，避免同一次读取被两层重复计数。
+static _Thread_local unsigned int ProbeHostDepth;
 static FILE *(*ProbeOriginalFopen)(const char *, const char *);
 static int (*ProbeOriginalOpen)(const char *, int, ...);
+static int (*ProbeOriginalAccess)(const char *, int);
+static DIR *(*ProbeOriginalOpendir)(const char *);
 static pthread_once_t ProbeResolveOnce = PTHREAD_ONCE_INIT;
 
 static void ProbeResolveFopen(void) {
     ProbeOriginalFopen = (FILE *(*)(const char *, const char *))dlsym(RTLD_NEXT, "fopen");
     ProbeOriginalOpen = (int (*)(const char *, int, ...))dlsym(RTLD_NEXT, "open");
+    ProbeOriginalAccess = (int (*)(const char *, int))dlsym(RTLD_NEXT, "access");
+    ProbeOriginalOpendir = (DIR *(*)(const char *))dlsym(RTLD_NEXT, "opendir");
 }
 
 // 读取 fd 的摘要；顺序位置不变（调用方用 pread）。返回 NO 表示无法核对内容。
@@ -121,6 +155,34 @@ static void ProbeRecordScopedLocked(const char *path, int fd, int error, BOOL st
     entry->stage = ProbeStageIndexLocked();
 }
 
+// 内容型宿主通道（NSData 等）已经拿到字节，直接按内容记录目录内文件身份。
+static void ProbeRecordScopedContentLocked(NSString *path, NSData *content, const char *channel) {
+    if (!(ProbeTraceOptions & CampusProbeTraceOptionsScopedFiles)) return;
+    if (content.length == 0 || content.length > 65536) return;
+    if (ProbeScopedFileCount >= (unsigned int)ProbeScopedFileLimit) { ProbeScopedOverflow = YES; return; }
+    const char *full = path.fileSystemRepresentation;
+    if (!full) return;
+    const char *name = strrchr(full, '/');
+    name = name ? name + 1 : full;
+    ProbeScopedFile *entry = &ProbeScopedFiles[ProbeScopedFileCount++];
+    if (strcmp(name, "yw_1222.jpg") == 0 || strcmp(name, "yw_1222_mwua.jpg") == 0 ||
+        strcmp(name, "Info.plist") == 0 || strcmp(name, "init.config") == 0 || strcmp(name, "update.config") == 0) {
+        snprintf(entry->name, sizeof(entry->name), "%s", name);
+    } else {
+        unsigned char tag[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256(full, (CC_LONG)strlen(full), tag);
+        snprintf(entry->name, sizeof(entry->name), "file-%02x%02x%02x%02x%02x%02x",
+            tag[0], tag[1], tag[2], tag[3], tag[4], tag[5]);
+    }
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH] = {0};
+    CC_SHA256(content.bytes, (CC_LONG)content.length, digest);
+    entry->size = (unsigned long long)content.length;
+    for (int i = 0; i < 6; i++) snprintf(entry->digest12 + i * 2, 3, "%02x", digest[i]);
+    snprintf(entry->entry, sizeof(entry->entry), "%s", channel);
+    entry->error = 0;
+    entry->stage = ProbeStageIndexLocked();
+}
+
 static BOOL ProbePathInScope(const char *path) {
     if (!ProbeScopeRootLength) return NO;
     // 相同前缀的兄弟目录和任意相对文件名均不能证明属于参考目录。
@@ -128,9 +190,67 @@ static BOOL ProbePathInScope(const char *path) {
         path[ProbeScopeRootLength] == '/';
 }
 
+// matched 传 -2 表示按路径自行分类；-1 表示已知非目标；0/1 表示已知目标索引。
+static void ProbeRecordHost(ProbeHostChannelIndex channel, NSString *path, int matched, NSData *content) {
+    if (ProbeInternalReadDepth > 0 || ProbeHostDepth > 0) return;
+    // swizzle 安装后全程生效；非活动期用无锁快路径避免每次 Foundation 读都加锁。
+    // 该读为良性竞态，加锁后会再次核对 ProbeTraceActive。
+    if (!ProbeTraceActive) return;
+    pthread_mutex_lock(&ProbeTraceMutex);
+    if (!ProbeTraceActive || !(ProbeTraceOptions & CampusProbeTraceOptionsHostChannels)) {
+        pthread_mutex_unlock(&ProbeTraceMutex);
+        return;
+    }
+    ProbeHostRecord *record = &ProbeHost[channel];
+    record->calls++;
+    BOOL inScope = NO;
+    if (matched == -2) {
+        matched = -1;
+        if (path.length > 0) {
+            const char *base = path.lastPathComponent.UTF8String;
+            if (base) {
+                for (int i = 0; i < 2; i++) {
+                    if (strcmp(base, ProbeNames[i]) == 0) { matched = i; break; }
+                }
+            }
+        }
+    }
+    if (path.length > 0) {
+        const char *full = path.fileSystemRepresentation;
+        // 对照目录本身被探测（opendir/access 目录）同样记入目录内。
+        if (full) inScope = ProbePathInScope(full) ||
+            (ProbeScopeRootLength && strncmp(full, ProbeScopeRoot, ProbeScopeRootLength) == 0 &&
+                full[ProbeScopeRootLength] == '\0');
+    }
+    if (matched >= 0) {
+        record->target++;
+        if (content != nil && ProbeFiles[matched].referenceAvailable &&
+            content.length > 0 && content.length <= 65536) {
+            unsigned char digest[CC_SHA256_DIGEST_LENGTH] = {0};
+            CC_SHA256(content.bytes, (CC_LONG)content.length, digest);
+            if (memcmp(digest, ProbeFiles[matched].digest, sizeof(digest)) == 0) record->targetSame++;
+            else record->targetDiff++;
+        }
+        if (content != nil && inScope) ProbeRecordScopedContentLocked(path, content, ProbeHostChannelNames[channel]);
+    } else if (inScope) {
+        record->scoped++;
+        if (content != nil) ProbeRecordScopedContentLocked(path, content, ProbeHostChannelNames[channel]);
+    } else {
+        record->outside++;
+    }
+    pthread_mutex_unlock(&ProbeTraceMutex);
+}
+
+static void ProbeObserveHostPath(ProbeHostChannelIndex channel, const char *path) {
+    if (!path || ProbeInternalReadDepth > 0 || ProbeHostDepth > 0) return;
+    NSString *text = [NSString stringWithUTF8String:path];
+    if (!text) return;
+    ProbeRecordHost(channel, text, -2, nil);
+}
+
 // 两个入口共用同一窗口，覆盖 SDK 工作线程；互斥保护快照及最多 64 KiB 的摘要读取。
 static void ProbeObserveFile(const char *path, int fd, int error, BOOL stdio) {
-    if (!path || ProbeInternalReadDepth > 0) return;
+    if (!path || ProbeInternalReadDepth > 0 || ProbeHostDepth > 0) return;
     const char *name = strrchr(path, '/');
     name = name ? name + 1 : path;
     pthread_mutex_lock(&ProbeTraceMutex);
@@ -209,6 +329,202 @@ int open(const char *path, int flags, ...) {
     return fd;
 }
 
+// access/opendir 出现在候选 SGMain 的 AVMP/uvm 宿主函数表中，
+// 是字节码在不能调用 fopen/open 的情况下可用的路径探测手段。
+// stat/lstat/readdir 在 Darwin 存在 $INODE64 符号重定向（macOS 桩测试目标会把
+// 调用改写成 readdir$INODE64 等），拦截命中不可靠，不作为可断言的观察通道；
+// fstat 只接受 fd，无法按路径记账。
+int access(const char *path, int mode) {
+    int before = errno;
+    pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
+    if (!ProbeOriginalAccess) { errno = ENOSYS; return -1; }
+    errno = before;
+    int result = ProbeOriginalAccess(path, mode);
+    int after = errno;
+    ProbeObserveHostPath(ProbeHostChannelAccess, path);
+    errno = after;
+    return result;
+}
+
+DIR *opendir(const char *path) {
+    int before = errno;
+    pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
+    if (!ProbeOriginalOpendir) { errno = ENOSYS; return NULL; }
+    errno = before;
+    DIR *handle = ProbeOriginalOpendir(path);
+    int after = errno;
+    if (handle) ProbeObserveHostPath(ProbeHostChannelOpendir, path);
+    errno = after;
+    return handle;
+}
+
+#pragma mark - Foundation 读方法拦截
+
+static id (*ProbeOriginalNSDataWithContentsOfFile)(id, SEL, NSString *);
+static id (*ProbeOriginalNSDataWithContentsOfFileOptionsError)(id, SEL, NSString *, NSDataReadingOptions, NSError **);
+static id (*ProbeOriginalNSStringWithContentsOfFileEncodingError)(id, SEL, NSString *, NSStringEncoding, NSError **);
+static id (*ProbeOriginalFileManagerContentsAtPath)(id, SEL, NSString *);
+static BOOL (*ProbeOriginalFileManagerFileExists)(id, SEL, NSString *);
+static BOOL (*ProbeOriginalFileManagerFileExistsIsDirectory)(id, SEL, NSString *, BOOL *);
+static id (*ProbeOriginalFileManagerAttributes)(id, SEL, NSString *, NSError **);
+static id (*ProbeOriginalFileHandleForReading)(id, SEL, NSString *);
+static NSString *(*ProbeOriginalBundlePathForResource)(id, SEL, NSString *, NSString *);
+
+static id ProbeNSDataWithContentsOfFile(id self, SEL selector, NSString *path) {
+    ProbeHostDepth++;
+    id result = ProbeOriginalNSDataWithContentsOfFile(self, selector, path);
+    ProbeHostDepth--;
+    ProbeRecordHost(ProbeHostChannelNSData, path, -2, [result isKindOfClass:NSData.class] ? result : nil);
+    return result;
+}
+
+static id ProbeNSDataWithContentsOfFileOptionsError(id self, SEL selector, NSString *path,
+        NSDataReadingOptions options, NSError **error) {
+    ProbeHostDepth++;
+    id result = ProbeOriginalNSDataWithContentsOfFileOptionsError(self, selector, path, options, error);
+    ProbeHostDepth--;
+    ProbeRecordHost(ProbeHostChannelNSData, path, -2, [result isKindOfClass:NSData.class] ? result : nil);
+    return result;
+}
+
+static id ProbeNSStringWithContentsOfFileEncodingError(id self, SEL selector, NSString *path,
+        NSStringEncoding encoding, NSError **error) {
+    ProbeHostDepth++;
+    id result = ProbeOriginalNSStringWithContentsOfFileEncodingError(self, selector, path, encoding, error);
+    ProbeHostDepth--;
+    // 文本解码结果不能等价于文件字节，因此不做内容核对，只记录路径命中。
+    ProbeRecordHost(ProbeHostChannelNSString, path, -2, nil);
+    return result;
+}
+
+static id ProbeFileManagerContentsAtPath(id self, SEL selector, NSString *path) {
+    ProbeHostDepth++;
+    id result = ProbeOriginalFileManagerContentsAtPath(self, selector, path);
+    ProbeHostDepth--;
+    ProbeRecordHost(ProbeHostChannelFileManager, path, -2, [result isKindOfClass:NSData.class] ? result : nil);
+    return result;
+}
+
+static BOOL ProbeFileManagerFileExists(id self, SEL selector, NSString *path) {
+    ProbeHostDepth++;
+    BOOL result = ProbeOriginalFileManagerFileExists(self, selector, path);
+    ProbeHostDepth--;
+    ProbeRecordHost(ProbeHostChannelFileManager, path, -2, nil);
+    return result;
+}
+
+static BOOL ProbeFileManagerFileExistsIsDirectory(id self, SEL selector, NSString *path, BOOL *directory) {
+    ProbeHostDepth++;
+    BOOL result = ProbeOriginalFileManagerFileExistsIsDirectory(self, selector, path, directory);
+    ProbeHostDepth--;
+    ProbeRecordHost(ProbeHostChannelFileManager, path, -2, nil);
+    return result;
+}
+
+static id ProbeFileManagerAttributes(id self, SEL selector, NSString *path, NSError **error) {
+    ProbeHostDepth++;
+    id result = ProbeOriginalFileManagerAttributes(self, selector, path, error);
+    ProbeHostDepth--;
+    ProbeRecordHost(ProbeHostChannelFileManager, path, -2, nil);
+    return result;
+}
+
+// NSFileHandle 只记录路径命中；读取句柄内容会移动调用方位置，不做内容核对。
+static id ProbeFileHandleForReading(id self, SEL selector, NSString *path) {
+    ProbeHostDepth++;
+    id result = ProbeOriginalFileHandleForReading(self, selector, path);
+    ProbeHostDepth--;
+    ProbeRecordHost(ProbeHostChannelFileHandle, path, -2, nil);
+    return result;
+}
+
+static NSString *ProbeBundlePathForResource(id self, SEL selector, NSString *name, NSString *type) {
+    ProbeHostDepth++;
+    NSString *result = ProbeOriginalBundlePathForResource(self, selector, name, type);
+    ProbeHostDepth--;
+    int matched = -2;
+    if (result.length == 0) {
+        // 解析失败时没有路径可分类，改用被查询的资源名判断指向哪张目标图片。
+        // ProbeNames 去掉 .jpg 扩展名后即 pathForResource: 的 name 实参。
+        if ([name isEqualToString:@"yw_1222"]) matched = 0;
+        else if ([name isEqualToString:@"yw_1222_mwua"]) matched = 1;
+        else matched = -1;
+    }
+    ProbeRecordHost(ProbeHostChannelBundle, result.length > 0 ? result : nil, matched, nil);
+    return result;
+}
+
+// 只在本类登记实现；实现来自父类时先添加再替换，避免改动父类影响系统组件。
+static BOOL ProbeInstallInterceptor(Class cls, SEL selector, IMP replacement, IMP *original) {
+    if (!cls || !selector || !replacement || !original) return NO;
+    Method method = class_getInstanceMethod(cls, selector);
+    if (!method) return NO;
+    *original = method_getImplementation(method);
+    if (*original == replacement) return YES;
+    Class owner = nil;
+    // 元类链在根处自引用，用有限深度防御而非依赖 superclass 为 nil。
+    Class candidate = cls;
+    for (int depth = 0; candidate && depth < 32; depth++) {
+        unsigned int count = 0;
+        Method *list = class_copyMethodList(candidate, &count);
+        BOOL found = NO;
+        for (unsigned int index = 0; index < count; index++) {
+            if (method_getName(list[index]) == selector) { found = YES; break; }
+        }
+        free(list);
+        if (found) { owner = candidate; break; }
+        Class next = class_getSuperclass(candidate);
+        if (next == candidate) break;
+        candidate = next;
+    }
+    if (owner == cls) {
+        method_setImplementation(method, replacement);
+        return YES;
+    }
+    if (class_addMethod(cls, selector, replacement, method_getTypeEncoding(method))) return YES;
+    // 并发下本类可能刚被登记；重新取本类实现兜底替换。
+    Method own = class_getInstanceMethod(cls, selector);
+    if (!own) return NO;
+    method_setImplementation(own, replacement);
+    return YES;
+}
+
+static BOOL ProbeInstallHostInterceptors(void) {
+    BOOL complete = YES;
+    // 类方法是元类上的实例方法，因此统一用元类安装。
+    complete = complete && ProbeInstallInterceptor(object_getClass(NSData.class), @selector(dataWithContentsOfFile:),
+        (IMP)ProbeNSDataWithContentsOfFile, (IMP *)&ProbeOriginalNSDataWithContentsOfFile);
+    complete = complete && ProbeInstallInterceptor(object_getClass(NSData.class), @selector(dataWithContentsOfFile:options:error:),
+        (IMP)ProbeNSDataWithContentsOfFileOptionsError, (IMP *)&ProbeOriginalNSDataWithContentsOfFileOptionsError);
+    complete = complete && ProbeInstallInterceptor(object_getClass(NSString.class), @selector(stringWithContentsOfFile:encoding:error:),
+        (IMP)ProbeNSStringWithContentsOfFileEncodingError, (IMP *)&ProbeOriginalNSStringWithContentsOfFileEncodingError);
+    complete = complete && ProbeInstallInterceptor(NSFileManager.class, @selector(contentsAtPath:),
+        (IMP)ProbeFileManagerContentsAtPath, (IMP *)&ProbeOriginalFileManagerContentsAtPath);
+    complete = complete && ProbeInstallInterceptor(NSFileManager.class, @selector(fileExistsAtPath:),
+        (IMP)ProbeFileManagerFileExists, (IMP *)&ProbeOriginalFileManagerFileExists);
+    complete = complete && ProbeInstallInterceptor(NSFileManager.class, @selector(fileExistsAtPath:isDirectory:),
+        (IMP)ProbeFileManagerFileExistsIsDirectory, (IMP *)&ProbeOriginalFileManagerFileExistsIsDirectory);
+    complete = complete && ProbeInstallInterceptor(NSFileManager.class, @selector(attributesOfItemAtPath:error:),
+        (IMP)ProbeFileManagerAttributes, (IMP *)&ProbeOriginalFileManagerAttributes);
+    complete = complete && ProbeInstallInterceptor(object_getClass(NSFileHandle.class), @selector(fileHandleForReadingAtPath:),
+        (IMP)ProbeFileHandleForReading, (IMP *)&ProbeOriginalFileHandleForReading);
+    complete = complete && ProbeInstallInterceptor(NSBundle.class, @selector(pathForResource:ofType:),
+        (IMP)ProbeBundlePathForResource, (IMP *)&ProbeOriginalBundlePathForResource);
+    return complete;
+}
+
+static void ProbeHostTotalsLocked(unsigned int *target, unsigned int *scoped, unsigned int *outside) {
+    unsigned int totalTarget = 0, totalScoped = 0, totalOutside = 0;
+    for (int i = 0; i < ProbeHostChannelCount; i++) {
+        totalTarget += ProbeHost[i].target;
+        totalScoped += ProbeHost[i].scoped;
+        totalOutside += ProbeHost[i].outside;
+    }
+    if (target) *target = totalTarget;
+    if (scoped) *scoped = totalScoped;
+    if (outside) *outside = totalOutside;
+}
+
 void CampusProbeResourceTraceMark(NSString *stage) {
     if (stage.length == 0) return;
     pthread_mutex_lock(&ProbeTraceMutex);
@@ -220,6 +536,7 @@ void CampusProbeResourceTraceMark(NSString *stage) {
         memcpy(mark->files, ProbeFiles, sizeof(mark->files));
         mark->scopedCount = ProbeScopedFileCount;
         mark->scopedOverflow = ProbeScopedOverflow ? 1 : 0;
+        ProbeHostTotalsLocked(&mark->hostTarget, &mark->hostScoped, &mark->hostOutside);
     }
     pthread_mutex_unlock(&ProbeTraceMutex);
 }
@@ -247,9 +564,19 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
     ProbeScopeRootLength = 0;
     ProbeCanaryPath[0] = '\0';
     memset(&ProbeCanary, 0, sizeof(ProbeCanary));
+    memset(ProbeHost, 0, sizeof(ProbeHost));
     pthread_mutex_unlock(&ProbeTraceMutex);
     pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
     if (!ProbeOriginalFopen || !ProbeOriginalOpen) return NO;
+    BOOL hostChannels = (options & CampusProbeTraceOptionsHostChannels) != 0;
+    if (hostChannels) {
+        if (!ProbeOriginalAccess || !ProbeOriginalOpendir) return NO;
+        // 拦截安装结果按进程恒定，只需一次；失败不得宣称宿主通道未被使用。
+        static dispatch_once_t interceptors;
+        static BOOL interceptorState;
+        dispatch_once(&interceptors, ^{ interceptorState = ProbeInstallHostInterceptors(); });
+        if (!interceptorState) return NO;
+    }
     BOOL allowMissing = (options & CampusProbeTraceOptionsAllowMissingReference) != 0;
     ProbeFileObservation references[2] = {0};
     NSString *canaryPath = [directory stringByAppendingPathComponent:
@@ -309,6 +636,28 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
         int fd = open(path.fileSystemRepresentation, O_RDONLY);
         if (fd >= 0) close(fd);
     }
+    // 宿主通道同样需要自检：未命中就不得宣称“该通道未被使用”。
+    unsigned int hostTargets = 0;
+    if (hostChannels) {
+        for (NSString *path in probePaths) {
+            const char *base = path.lastPathComponent.UTF8String;
+            BOOL target = NO;
+            for (int i = 0; i < 2; i++) {
+                if (base && strcmp(base, ProbeNames[i]) == 0) { target = YES; break; }
+            }
+            if (target) hostTargets++;
+        }
+        for (NSString *path in probePaths) {
+            [NSData dataWithContentsOfFile:path];
+            [NSString stringWithContentsOfFile:path encoding:NSISOLatin1StringEncoding error:NULL];
+            [[NSFileManager defaultManager] contentsAtPath:path];
+            [[NSFileManager defaultManager] fileExistsAtPath:path];
+            [[NSFileManager defaultManager] attributesOfItemAtPath:path error:NULL];
+            access(path.fileSystemRepresentation, F_OK);
+        }
+        DIR *probeDirectory = opendir(directory.fileSystemRepresentation);
+        if (probeDirectory) closedir(probeDirectory);
+    }
     pthread_mutex_lock(&ProbeTraceMutex);
     BOOL valid = !needCanary || (ProbeCanary.fopenCalls == 1 && ProbeCanary.openCalls == 1 &&
         ProbeCanary.sameFile == 2 && ProbeCanary.sameContent == 2);
@@ -318,6 +667,18 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
         valid = valid && ProbeFiles[i].fopenCalls == 1 && ProbeFiles[i].openCalls == 1 &&
             ProbeFiles[i].sameFile == 2 && ProbeFiles[i].sameContent == 2;
     }
+    if (hostChannels) {
+        const ProbeHostChannelIndex contentChannels[] = {
+            ProbeHostChannelNSData, ProbeHostChannelNSString, ProbeHostChannelFileManager,
+            ProbeHostChannelAccess,
+        };
+        for (unsigned int index = 0; index < sizeof(contentChannels) / sizeof(contentChannels[0]); index++) {
+            const ProbeHostRecord *record = &ProbeHost[contentChannels[index]];
+            // FileManager 每路径触发多个读方法，故用 >= 断言命中而非精确相等。
+            valid = valid && record->calls >= probePaths.count && record->target >= hostTargets;
+        }
+        valid = valid && ProbeHost[ProbeHostChannelOpendir].calls >= 1;
+    }
     memcpy(ProbeFiles, references, sizeof(ProbeFiles));
     memset(ProbeScopedFiles, 0, sizeof(ProbeScopedFiles));
     ProbeScopedFileCount = 0;
@@ -326,6 +687,7 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
     ProbeStageMarkCount = 0;
     ProbeCanaryPath[0] = '\0';
     memset(&ProbeCanary, 0, sizeof(ProbeCanary));
+    memset(ProbeHost, 0, sizeof(ProbeHost));
     ProbeTraceActive = valid;
     pthread_mutex_unlock(&ProbeTraceMutex);
     if (needCanary) [[NSFileManager defaultManager] removeItemAtPath:canaryPath error:nil];
@@ -351,6 +713,7 @@ static NSString *ProbeObservationText(const ProbeFileObservation *value) {
 NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(void) {
     pthread_mutex_lock(&ProbeTraceMutex);
     BOOL wasActive = ProbeTraceActive;
+    CampusProbeTraceOptions options = ProbeTraceOptions;
     // 补齐最后一个边界之后的访问；传统未标记窗口仍保持四行报告。
     if (wasActive && ProbeStageMarkCount > 0 && ProbeStageMarkCount < ProbeStageMarkLimit) {
         ProbeStageMark *last = &ProbeStageMarks[ProbeStageMarkCount++];
@@ -358,6 +721,7 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
         snprintf(last->stage, sizeof(last->stage), "%s", "窗口结束");
         memcpy(last->files, ProbeFiles, sizeof(last->files));
         last->scopedCount = ProbeScopedFileCount;
+        ProbeHostTotalsLocked(&last->hostTarget, &last->hostScoped, &last->hostOutside);
     }
     ProbeTraceActive = NO;
     ProbeFileObservation snapshot[2];
@@ -369,13 +733,15 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
     ProbeStageMark marks[ProbeStageMarkLimit];
     memcpy(marks, ProbeStageMarks, sizeof(marks));
     unsigned int markCount = ProbeStageMarkCount;
-    CampusProbeTraceOptions options = ProbeTraceOptions;
+    ProbeHostRecord host[ProbeHostChannelCount];
+    memcpy(host, ProbeHost, sizeof(host));
     memset(ProbeFiles, 0, sizeof(ProbeFiles));
     memset(ProbeScopedFiles, 0, sizeof(ProbeScopedFiles));
     ProbeScopedFileCount = 0;
     ProbeScopedOverflow = NO;
     memset(ProbeStageMarks, 0, sizeof(ProbeStageMarks));
     ProbeStageMarkCount = 0;
+    memset(ProbeHost, 0, sizeof(ProbeHost));
     ProbeTraceOptions = CampusProbeTraceOptionsTargetsOnly;
     pthread_mutex_unlock(&ProbeTraceMutex);
     if (!wasActive) return @[];
@@ -387,6 +753,19 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
             @"result": [NSString stringWithFormat:@"fopen %u，open %u；包含工作线程，不包含自检",
                 snapshot[i].fopenCalls, snapshot[i].openCalls]}];
     }
+    BOOL hostEnabled = (options & CampusProbeTraceOptionsHostChannels) != 0;
+    if (hostEnabled) {
+        [rows addObject:@{@"step": @"宿主通道说明",
+            @"result": @"统计 AVMP 宿主表可用的路径入口与 Foundation 读方法；命中可证明该通道被调用，零命中仍不能证明未读取"}];
+        for (int index = 0; index < ProbeHostChannelCount; index++) {
+            const ProbeHostRecord *record = &host[index];
+            [rows addObject:@{@"step": [@"宿主通道：" stringByAppendingString:
+                [NSString stringWithUTF8String:ProbeHostChannelNames[index]]],
+                @"result": [NSString stringWithFormat:@"调用 %u；目标命中 %u（内容一致 %u，不同 %u）；目录内 %u；目录外 %u",
+                    record->calls, record->target, record->targetSame, record->targetDiff,
+                    record->scoped, record->outside]}];
+        }
+    }
     for (unsigned int index = 0; index < markCount; index++) {
         ProbeStageMark value = marks[index];
         ProbeStageMark previous = {0};
@@ -396,6 +775,12 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
                 value.files[0].attempts - previous.files[0].attempts, value.files[0].opened - previous.files[0].opened,
                 value.files[1].attempts - previous.files[1].attempts, value.files[1].opened - previous.files[1].opened,
                 value.scopedCount - previous.scopedCount]}];
+        if (hostEnabled) {
+            [rows addObject:@{@"step": [@"阶段宿主通道：" stringByAppendingString:[NSString stringWithUTF8String:value.stage]],
+                @"result": [NSString stringWithFormat:@"目标命中 %u；目录内 %u；目录外 %u",
+                    value.hostTarget - previous.hostTarget, value.hostScoped - previous.hostScoped,
+                    value.hostOutside - previous.hostOutside]}];
+        }
     }
     if ((options & CampusProbeTraceOptionsScopedFiles) && scopedCount > 0) {
         for (unsigned int index = 0; index < scopedCount; index++) {

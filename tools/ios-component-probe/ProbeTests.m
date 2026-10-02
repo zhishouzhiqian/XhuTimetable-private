@@ -11,6 +11,7 @@
 #import "ProbeContainerSnapshot.h"
 #include <errno.h>
 #include <fcntl.h>
+#include <dirent.h>
 #include <stdio.h>
 #include <unistd.h>
 #include <sys/stat.h>
@@ -253,6 +254,66 @@ static void CheckDiagnosticTrace(void) {
     [[NSFileManager defaultManager] removeItemAtPath:sibling error:nil];
     puts("诊断跟踪测试覆盖：哨兵失败、缺图自检、阶段增量、内部采样排除、跨线程及目录边界。");
 }
+// 宿主通道：AVMP 字节码不能调用 fopen/open，内容读取只能经 objc_msgSend 走 Foundation；
+// 路径探测走 access/opendir。本测试验证这些通道都被观察且身份/内容可比对。
+static void CheckHostChannelTrace(void) {
+    NSString *main = [folder stringByAppendingPathComponent:@"yw_1222.jpg"];
+    // 目录外文件在窗口开启前创建、结束后删除，避免原子写入的内部
+    // fileExistsAtPath 调用污染 NSFileManager 通道计数。
+    NSString *outside = [NSTemporaryDirectory() stringByAppendingPathComponent:@"probe-host-outside.jpg"];
+    [@"outside" writeToFile:outside atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    CampusProbeTraceOptions options = CampusProbeTraceOptionsScopedFiles | CampusProbeTraceOptionsHostChannels;
+    Check(CampusProbeResourceTraceBeginWithOptions(folder, options), @"宿主通道自检应全部命中后才允许宣称窗口有效");
+    CampusProbeResourceTraceMark(@"宿主阶段");
+    // 内容通道：读取目标文件，应记为目标命中且内容与参考一致。
+    NSData *content = [NSData dataWithContentsOfFile:main];
+    Check(content != nil, @"桩环境应能读取目标文件");
+    NSString *text = [NSString stringWithContentsOfFile:main encoding:NSISOLatin1StringEncoding error:NULL];
+    Check(text != nil, @"字符串通道应可用");
+    NSData *viaManager = [[NSFileManager defaultManager] contentsAtPath:main];
+    Check(viaManager != nil, @"NSFileManager 通道应可用");
+    // 路径通道：access 目标文件与 opendir 对照目录。
+    Check(access(main.fileSystemRepresentation, F_OK) == 0, @"access 应命中目标文件");
+    DIR *handle = opendir(folder.fileSystemRepresentation);
+    Check(handle != NULL, @"目录应可打开");
+    closedir(handle);
+    // 采样排除：宿主通道同样受内部读取深度约束。
+    CampusProbeResourceTraceSuspendCurrentThread();
+    [NSData dataWithContentsOfFile:main];
+    access(main.fileSystemRepresentation, F_OK);
+    CampusProbeResourceTraceResumeCurrentThread();
+    // 目录外读取应记为目录外，不冒充目录内命中。
+    [NSData dataWithContentsOfFile:outside];
+    NSArray *rows = CampusProbeResourceTraceEnd();
+    [[NSFileManager defaultManager] removeItemAtPath:outside error:nil];
+    Check(ReportResult(rows, @"宿主通道说明") != nil, @"启用宿主通道后必须输出说明行");
+    // NSData：自检清零后 1 次目标读取 + 1 次目录外读取；目标内容一致 1。
+    CheckReportResult(rows, @"宿主通道：NSData", @"调用 2；目标命中 1（内容一致 1，不同 0）；目录内 0；目录外 1");
+    CheckReportResult(rows, @"宿主通道：NSString", @"调用 1；目标命中 1（内容一致 0，不同 0）；目录内 0；目录外 0");
+    CheckReportResult(rows, @"宿主通道：NSFileManager", @"调用 1；目标命中 1（内容一致 1，不同 0）；目录内 0；目录外 0");
+    CheckReportResult(rows, @"宿主通道：access", @"调用 1；目标命中 1（内容一致 0，不同 0）；目录内 0；目录外 0");
+    CheckReportResult(rows, @"宿主通道：opendir", @"调用 1；目标命中 0（内容一致 0，不同 0）；目录内 1；目录外 0");
+    // 未调用的通道必须如实报 0，不得伪造命中。
+    CheckReportResult(rows, @"宿主通道：NSFileHandle", @"调用 0；目标命中 0（内容一致 0，不同 0）；目录内 0；目录外 0");
+    CheckReportResult(rows, @"宿主通道：NSBundle", @"调用 0；目标命中 0（内容一致 0，不同 0）；目录内 0；目录外 0");
+    // 阶段行：Mark 在操作前，故“宿主阶段”为 0，全部命中汇入 End 补的“窗口结束”。
+    CheckReportResult(rows, @"阶段宿主通道：宿主阶段", @"目标命中 0；目录内 0；目录外 0");
+    NSString *hostEndRow = ReportResult(rows, @"阶段宿主通道：窗口结束");
+    Check([hostEndRow containsString:@"目标命中 4"] && [hostEndRow containsString:@"目录内 1"] &&
+        [hostEndRow containsString:@"目录外 1"],
+        @"窗口结束阶段应汇总 4 次目标命中、1 次目录内与 1 次目录外");
+    // 内容型通道读到的目标文件应出现在窗口文件清单，入口标注通道名。
+    BOOL foundNSDataEntry = NO;
+    for (NSDictionary *row in rows) {
+        if ([row[@"step"] hasPrefix:@"窗口文件 "] && [row[@"result"] containsString:@"入口 NSData"]) foundNSDataEntry = YES;
+    }
+    Check(foundNSDataEntry, @"NSData 读到的目标文件必须进入窗口文件清单");
+    for (NSDictionary *row in rows) {
+        Check(![row[@"result"] containsString:folder] && ![row[@"result"] containsString:@"private-"], @"宿主通道不得泄露路径或内容");
+    }
+    Check(CampusProbeResourceTraceEnd().count == 0, @"结束后不能返回上一次结果");
+    puts("宿主通道测试覆盖：Foundation 读方法、access/opendir、采样排除、目录边界与身份内容核对。");
+}
 static void CheckInputContract(void) {
     NSData *body = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
     NSDictionary *headers = @{@"x-t": @"1700000000", @"x-uid": @"sample-uid", @"x-reqbiz-ext": @"sample-biz",
@@ -407,6 +468,7 @@ int main(void) {
         [manifest writeToFile:[folder stringByAppendingPathComponent:@"probe-manifest.plist"] atomically:YES];
         CheckResourceTrace();
         CheckDiagnosticTrace();
+        CheckHostChannelTrace();
         dispatch_async(dispatch_get_main_queue(), ^{ RunCase(0); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ Check(NO, @"原生测试超时"); });
         dispatch_main();

@@ -173,10 +173,35 @@ def check_brace_balance():
                 fail("{} 括号不平衡：{} 与 {} 相差 {}".format(relative, opener, closer, delta))
 
 
+def check_host_channels():
+    """宿主通道观察的接线：选项、swizzle 入口、诊断启用三处必须同时存在。"""
+    header = read(TOOLS / "ProbeResourceTrace.h")
+    implementation = read(TOOLS / "ProbeResourceTrace.m")
+    probe = read(APP / "CampusComponentProbe.m")
+    if "CampusProbeTraceOptionsHostChannels" not in header:
+        fail("ProbeResourceTrace.h 缺少 CampusProbeTraceOptionsHostChannels 选项")
+    for marker in ["ProbeInstallHostInterceptors", "dataWithContentsOfFile:",
+                   "stringWithContentsOfFile:encoding:error:", "contentsAtPath:",
+                   "fileHandleForReadingAtPath:", "pathForResource:ofType:",
+                   "int access(const char *path, int mode)",
+                   "DIR *opendir(const char *path)"]:
+        if marker not in implementation:
+            fail("ProbeResourceTrace.m 缺少宿主通道入口：{}".format(marker))
+    if "CampusProbeTraceOptionsHostChannels" not in probe:
+        fail("诊断入口没有启用宿主通道观察")
+    # 自检必须覆盖宿主通道：未命中不得宣称窗口有效。
+    if "record->calls >= probePaths.count" not in implementation:
+        fail("宿主通道自检断言缺失：未命中就不得启用窗口")
+    tests = read(TOOLS / "ProbeTests.m")
+    if "CheckHostChannelTrace" not in tests:
+        fail("桩测试缺少宿主通道场景 CheckHostChannelTrace")
+
+
 def main():
     check_c_functions()
     check_build_script()
     check_diagnostics_entry()
+    check_host_channels()
     check_report_hygiene()
     check_brace_balance()
     if failures:

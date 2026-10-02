@@ -270,13 +270,20 @@ static NSDictionary<NSString *, id> *CampusProbeDiagnosticPrepare(NSString *sour
 #if CAMPUS_COMPONENT_TRACE_FILES
                 CampusProbeTraceOptions traceOptions = CampusProbeTraceOptionsTargetsOnly;
                 if (diagnostics) {
-                    traceOptions = CampusProbeTraceOptionsScopedFiles | CampusProbeTraceOptionsAllowMissingReference;
+                    // 宿主通道是本轮新增观察面：候选 SGMain 的 AVMP/uvm 宿主函数表里
+                    // 只有 access/lseek/fstat/lstat/opendir/readdir，没有 fopen/open/read，
+                    // 字节码读内容只能经 objc_msgSend 调 Foundation。只统计 fopen/open
+                    // 必然零命中，因此诊断模式同时观察这两组通道。
+                    traceOptions = CampusProbeTraceOptionsScopedFiles |
+                        CampusProbeTraceOptionsAllowMissingReference |
+                        CampusProbeTraceOptionsHostChannels;
                 }
                 BOOL traceBegan = diagnostics ?
                     CampusProbeResourceTraceBeginWithOptions(effectivePath, traceOptions) :
                     CampusProbeResourceTraceBegin(path);
                 emit(@"SDK 文件跟踪", traceBegan ?
-                    @"已启用：fopen/open 运行时入口自检通过，覆盖检查窗口内各线程；不展示路径和内容" : @"入口自检或参考资源准备失败；本次不能核实 SDK 文件访问");
+                    @"已启用：fopen/open 与宿主通道（access/opendir 及 Foundation 读方法）自检通过，覆盖检查窗口内各线程；不展示路径和内容" :
+                    @"入口自检、宿主通道拦截安装或参考资源准备失败；本次不能核实 SDK 文件访问");
                 mark(@"窗口开始");
 #endif
                 for (NSString *name in @[@"MainPlugin", @"MiddleTierPlugin", @"SecurityBodyPlugin"]) {
