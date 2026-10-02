@@ -176,6 +176,27 @@ IR 的 target triple 是 `arm64-apple-ios9.0.0`，且 `stat`/`lstat`/`fopen` 等
 
 约束不变：不改错误返回值、不跳过安全校验、不把非空但不完整字典当作签名成功、不向构建上传安全资源。
 
+## 第三次 CI 失败与修复（桩测试断言，非编译错误）
+
+`75a01b3` 编译通过、桩测试开始运行，但在 `CheckDiagnosticTrace` 的断言「两图缺失时必须校验哨兵的两个入口」处 `exit(1)`，配合构建脚本的 `set -euo pipefail` 终止 Step 3。
+
+根因是 `bc59d50` 重写时把哨兵文件的准备顺序弄反了：
+
+| 版本 | 顺序 | 结果 |
+| --- | --- | --- |
+| `f615ff0`（曾通过） | `writeToFile:` → `stat()` | 文件已存在，取到 dev/ino |
+| `bc59d50`–`75a01b3` | `stat()` → `writeToFile:` | 文件尚不存在，stat 必然失败 → `return NO` |
+
+该分支只在**参考资源缺失**时进入（`needCanary`）。真机 `main-zero` 变体两图俱在（主图被替换为同长度全零，文件仍在），走不到这里，所以两轮真机运行都没暴露它，只有桩测试的「两图缺失」场景能触发。
+
+同时修掉 `CheckHostChannelTrace` 里三处**从未被运行过**的断言（`bc59d50` 编译失败、`75a01b3` 在它之前中止，因此该测试一次都没执行过）：
+
+1. `stat`/`fd` 通道断言 `target >= 2`，改为以 `selfChecked` 门控且只要求 `>= 1`。是否命中取决于 `stat`/`lstat`/`fstat`/`lseek` 的 C 符号在本平台能否绑定到探针定义，属平台行为而非探针逻辑；`fd` 通道还需 `lseek` 与 `fstat` 都命中才有 2。
+2. `endTarget >= 10` 改为 `>= 9`。按测试体逐次核对，平台无关的必然命中是 9 次（NSData 1、NSDataInit 2、NSString 1、NSStringInit 1、NSFileManager 1、NSFileHandle 1、NSBundle 1、access 1）；原先的 10 把通过与否押在 stat/fd 命中上。
+3. `containsString:@"目录内 1"` 这类精确字符串匹配改为解析数值后 `>= 1`。阶段行是各通道汇总，Foundation 内部若对目录外路径多产生一次调用就会变成 2，精确匹配会因此失败。
+
+`audit_probe_source_consistency.py` 新增哨兵顺序断言，并已双向验证：注入「stat 在 write 之前」时精确报错，恢复后通过。
+
 ## 一个已排除的替代方案
 
 已核对公开 SDK 包（`build/campus-ios-probe/public-sdk.zip`，2902 条目）：**`.jpg` 条目为 0**，无任何 `yw_` 安全图片。即公开百川包不自带配套安全图片，「同代 SDK + 自有 appkey 图片」这条正路无法在本地构造对照，必须外部申请。

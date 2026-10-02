@@ -143,6 +143,28 @@ if 'selfChecked' not in impl:
 if 'ProbeHostDepth++;' not in impl:
     errors.append('缺少 ProbeHostDepth 抑制，内部读取可能递归计数')
 
+# 7. 哨兵文件必须先写入再 stat：顺序颠倒会让 stat 必然失败、整个窗口判无效。
+#    这是 bc59d50 引入、75a01b3 才在桩测试暴露的回归（真机 main-zero 两图俱在，走不到该分支）。
+canary_block_start = impl.find('if (needCanary) {')
+if canary_block_start < 0:
+    errors.append('找不到哨兵文件准备块 if (needCanary)')
+else:
+    canary_block = impl[canary_block_start:canary_block_start + 1600]
+    write_pos = canary_block.find('writeToFile:canaryPath')
+    stat_pos = canary_block.find('stat(canaryPath.fileSystemRepresentation')
+    if write_pos < 0:
+        errors.append('哨兵块缺少 writeToFile:canaryPath')
+    elif stat_pos < 0:
+        errors.append('哨兵块缺少对 canaryPath 的 stat')
+    elif stat_pos < write_pos:
+        errors.append('哨兵文件必须先 writeToFile 再 stat：顺序颠倒会使 stat 必然失败')
+    # 写入与 stat 必须都在 ProbeHostDepth 抑制内，否则 writeToFile 内部的
+    # NSFileManager 调用会被计入 SDK 的通道命中。
+    depth_up = canary_block.find('ProbeHostDepth++;')
+    depth_down = canary_block.find('ProbeHostDepth--;')
+    if not (0 <= depth_up < write_pos and write_pos < depth_down):
+        errors.append('哨兵写入必须包在 ProbeHostDepth 抑制区间内')
+
 print('探针静态自检：')
 if errors:
     for item in errors:

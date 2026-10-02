@@ -143,8 +143,8 @@ static pthread_once_t ProbeResolveOnce = PTHREAD_ONCE_INIT;
 // 不在定义侧加 __DARWIN_INODE64 标签：真机目标是 arm64，IR 已核对 SGMain 引用的是
 // 纯 _stat/_lstat（$INODE64 计数 0），该宏在 arm64 上本就展开为空，加了纯属多余；
 // 实测 clang 会在定义处报 “expected ';' after top level declarator”。
-// x86_64 macOS 桩测试环境下 stat 通道可能因头文件重定向而不命中，
-// 已由 ProbeTests.m 的 PROBE_STAT_INODE64_REDIRECT 豁免，不影响真机结论。
+// x86_64 macOS 桩测试环境下 stat/fd 通道可能因头文件重定向而不命中，属平台行为，
+// ProbeTests.m 的 CheckHostChannelTrace 已对这两条通道豁免强制自检断言，不影响真机结论。
 
 static void ProbeResolveFopen(void) {
     ProbeOriginalFopen = (FILE *(*)(const char *, const char *))dlsym(RTLD_NEXT, "fopen");
@@ -949,12 +949,17 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
     }
     if (needCanary) {
         NSData *canaryData = [@"probe" dataUsingEncoding:NSUTF8StringEncoding];
-        struct stat info;
+        // 顺序不可颠倒：必须先写入哨兵文件，再 stat 它取 dev/ino。
+        // 反过来 stat 会因文件尚不存在而必然失败，导致整个窗口被判无效——
+        // bc59d50 就是这样让桩测试「两图缺失时必须校验哨兵的两个入口」失败的。
+        // 整段包在 ProbeHostDepth 抑制内：writeToFile:atomically: 内部可能触发我们
+        // 拦截的 NSFileManager 方法，不得计入 SDK 的通道命中。
         ProbeHostDepth++;
-        BOOL statOk = stat(canaryPath.fileSystemRepresentation, &info) == 0;
+        BOOL written = [canaryData writeToFile:canaryPath atomically:YES];
+        struct stat info;
+        BOOL statOk = written && stat(canaryPath.fileSystemRepresentation, &info) == 0;
         ProbeHostDepth--;
-        if (strlen(canaryPath.fileSystemRepresentation) >= sizeof(ProbeCanaryPath) ||
-            ![canaryData writeToFile:canaryPath atomically:YES] || !statOk) {
+        if (strlen(canaryPath.fileSystemRepresentation) >= sizeof(ProbeCanaryPath) || !statOk) {
             [[NSFileManager defaultManager] removeItemAtPath:canaryPath error:nil];
             return NO;
         }
