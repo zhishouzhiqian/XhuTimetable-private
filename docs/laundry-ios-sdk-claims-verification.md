@@ -113,7 +113,20 @@ AppKey 原生注册 `(1, 9, 2, 1)` 对应 `CMa02WYLvRCbzL`，其继续转发到 
 
 字节码 VM 想读安全图片，**只能经 `objc_msgSend` 调 Foundation，或用 `access/lstat/opendir/readdir` 探测路径**；它根本没有 `fopen/open` 宿主入口。app 级 `fopen/open` interposer 又只覆盖自身链接命名空间（Foundation 内部读取不经它）。两者叠加，**fopen/open 零命中是必然的，与「SDK 有没有读文件」无关**。这正是上一版观察方法的原理性缺口，也解释了自检通过却全程零命中。
 
-据此本轮把诊断观察面从 `fopen/open` 扩到**宿主通道**：`ProbeResourceTrace` 新增 `CampusProbeTraceOptionsHostChannels`，用 method swizzle 拦截 `NSData dataWithContentsOfFile:`(+options:error:)、`NSString stringWithContentsOfFile:encoding:error:`、`NSFileManager contentsAtPath:/fileExistsAtPath:(isDirectory:)/attributesOfItemAtPath:error:`、`NSFileHandle fileHandleForReadingAtPath:`、`NSBundle pathForResource:ofType:`，并 interpose `access/opendir`。swizzle 对**任意调用方**（含字节码经 objc_msgSend 的调用）生效，不受链接命名空间限制——这是它比 app 级 `fopen/open` 更可能命中的根本原因。`readdir/stat/lstat` 在 Darwin 有 `$INODE64` 符号重定向（macOS 桩测试目标会把调用改写成 `readdir$INODE64` 等），拦截命中不可靠，故不列为可断言通道；目录枚举仍可由 `opendir` 命中 + Foundation 读方法覆盖。
+据此本轮把诊断观察面从 `fopen/open` 扩到**宿主通道**：`ProbeResourceTrace` 新增 `CampusProbeTraceOptionsHostChannels`，用 method swizzle 拦截 `NSData dataWithContentsOfFile:`(+options:error:)、`NSString stringWithContentsOfFile:encoding:error:`、`NSFileManager contentsAtPath:/fileExistsAtPath:(isDirectory:)/attributesOfItemAtPath:error:`、`NSFileHandle fileHandleForReadingAtPath:`、`NSBundle pathForResource:ofType:`，并 interpose `access/opendir`。swizzle 对**任意调用方**（含字节码经 objc_msgSend 的调用）生效，不受链接命名空间限制——这是它比 app 级 `fopen/open` 更可能命中的根本原因。
+
+### 该轮观察面不足，已被真机结果证伪（修正记录）
+
+上一版本节还写着「`readdir/stat/lstat` 在 Darwin 有 `$INODE64` 符号重定向，拦截命中不可靠，故不列为可断言通道」，并据此移除了 `stat/lstat`。**这个判断是错的，且已被两处证据推翻**：
+
+1. **IR 核对**：SGMain 的 target triple 是 `arm64-apple-ios9.0.0`，`stat`（36 处调用）、`lstat`（3 处）、`fopen`（27 处）全部是**纯符号，`$INODE64` 计数为 0**。`$INODE64` 重定向只存在于 x86_64 macOS 桩测试环境，真机 arm64 上 SGMain 的调用会直接绑定到探针定义。核对脚本 `build/laundry-ios-analysis/check_stat_symbol_binding.py`。
+2. **计数旁证**：真机 `access` 命中 28 次、`opendir` 52 次，都**超过** IR 里的调用点（17 / 6），差额来自 AVMP 字节码经宿主表调用。既然同类的 C 原语能被抓到，`stat` 被移除就纯粹是覆盖面损失。
+
+因此移除 `stat` 是本次调查中的一个实际失误：它是覆盖面最大的文件原语，却在唯一一轮真机运行里缺席。现已补回，并用 `PROBE_STAT_SYMBOL` 处理 x86_64 的同代符号（dlsym 必须取与定义同代的 `stat`/`stat$INODE64`，否则 `struct stat` 布局不一致会读到垃圾值）。
+
+另一处不足是只 swizzle 了**类方法**。字节码经 `objc_msgSend` 可以直接调 `[[NSData alloc] initWithContentsOfFile:]` 绕过 `+dataWithContentsOfFile:`，故实例 `init` 族必须单独拦截。已补齐 NSData/NSString 的 `initWithContentsOfFile:`、`initWithContentsOfFile:options:error:`、`initWithContentsOfURL:`，并新增 URL 形态、`fileExistsAtPath:isDirectory:`、`contentsOfDirectoryAtPath:error:`、`+[NSBundle bundleWithURL:]`、`-pathForResource:ofType:inDirectory:`，以及 fd 级 `lseek`/`fstat`（经 `fcntl(F_GETPATH)` 反查路径）。
+
+`readdir` 仍不拦截：它在 AVMP 宿主表里存在，但 x86_64 macOS 上确有 `$INODE64` 变体、桩测试命中不可靠，且目录枚举已可由 `opendir` + `contentsOfDirectoryAtPath:error:` 覆盖。`read/pread` 明确不拦截：宿主表里没有这两个入口（只有 `lseek/fstat/fcntl`），而它们是全进程最热路径。
 
 不修改返回值、不跳过安全校验、不把非空但不完整的字典判定为签名成功，这些约束保持不变。
 
@@ -122,7 +135,10 @@ AppKey 原生注册 `(1, 9, 2, 1)` 对应 `CMa02WYLvRCbzL`，其继续转发到 
 - 只读调用点脚本运行成功；排除了声明和全局注册表引用对计数的干扰。
 - 复核了 Foundation 调用点的资源文件名、MainPlugin 初始化块、自定义路径传递和两个错误码包装层。
 - 仅检查可解析的 bitcode。部分对象不含有效 bitcode，间接调用和虚拟化代码不能由上述扫描完整还原。
-- 已收到修订 `8234c06` 的七组设备对照，结果见实验协议；`204/2404` 尚未修复，签名和服务端注册尚未验证。
-- 本轮新增 `tools/audit_sg_appkey_dispatch.py`（分发链 + raw→2400 映射 + 宿主表审计）与 `tools/audit_sg_bitcode_coverage.py`（bitcode 覆盖面）。两者在 Windows 上对本地 `build/laundry-ios-analysis` 产物运行通过；该目录不在 Git 仓库内，脚本可复现本节全部静态结论。
-- 宿主通道观察（swizzle）只经逐行复核与静态接线检查，**本机无 Xcode，未编译、未在真机运行**；能否命中仍需一轮设备对照验证（见实验协议「宿主通道对照轮」）。
-- `raw=3/4` 的具体判定指令在 AVMP 字节码内，静态不可见；本节只把根因收敛到「字节码图片解析器拒绝校园图」，未定位到具体校验指令，不宣称已证明代际不兼容为唯一原因。
+- 已收到修订 `8234c06` 的七组设备对照与修订 `f615ff0` 的宿主通道第一轮（`main-zero`，103 次通道调用、目标命中 0），结果见实验协议；`204/2404` 尚未修复，签名和服务端注册尚未验证。
+- 宿主通道第一轮**证伪了「只覆盖类方法即可」的判断**，并证明移除 `stat/lstat` 是失误（IR 核对：真机 arm64 无 `$INODE64` 变体，`stat` 有 36 处调用）。第二轮已补齐实例 `init` 族、`stat/lstat`、fd 级 `lseek/fstat`，并为每条通道加「自检命中」标注，使零命中可区分「SDK 没读」与「我没覆盖」。
+- 已核对四个 framework 均为**静态库**（每个 slice 是 `ar` 归档、无 `LC_ID_DYLIB`），故 SGMain 的未定义文件符号在链接期绑定到探针定义；真机 `access` 28 次 / `opendir` 52 次均超过 IR 调用点（17 / 6），差额来自 AVMP 宿主表调用，反证 C 层 hook 对 SDK 有效、`fopen=0` 是真阴性。
+- 已核对公开 SDK 包（2902 条目）**不含任何 `.jpg` 或 `yw_` 安全图片**，故「同代 SDK + 自有 appkey 图片」无法本地构造对照，须外部申请。
+- 新增 `tools/audit_probe_source_consistency.py`：无 Xcode 环境下对 Objective-C 源码做文本级核对（括号平衡、`ProbeOriginal*` 声明与赋值配对、IMP 出参确被 `ProbeInstallInterceptor` 消费、通道名与报告一致、已移除符号无残留、自检判据、递归抑制）。Windows 上运行通过。
+- 宿主通道观察（swizzle）与新增 C 拦截只经逐行复核与静态检查，**本机无 Xcode，未编译、未在真机运行**；能否命中仍需一轮设备对照验证（见实验协议「第二轮判定矩阵」）。
+- `raw=3/4` 的具体判定指令在 AVMP 字节码内，静态不可见；本节只把根因收敛到「字节码图片解析器拒绝校园图」，未定位到具体校验指令，不宣称已证明代际不兼容为唯一原因。第二轮的 H1/H2 判定矩阵正是为区分这一点而设计。

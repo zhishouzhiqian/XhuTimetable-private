@@ -174,27 +174,62 @@ def check_brace_balance():
 
 
 def check_host_channels():
-    """宿主通道观察的接线：选项、swizzle 入口、诊断启用三处必须同时存在。"""
+    """宿主通道观察的接线：选项、拦截入口、诊断启用、自检标注四处必须同时存在。"""
     header = read(TOOLS / "ProbeResourceTrace.h")
     implementation = read(TOOLS / "ProbeResourceTrace.m")
     probe = read(APP / "CampusComponentProbe.m")
     if "CampusProbeTraceOptionsHostChannels" not in header:
         fail("ProbeResourceTrace.h 缺少 CampusProbeTraceOptionsHostChannels 选项")
-    for marker in ["ProbeInstallHostInterceptors", "dataWithContentsOfFile:",
-                   "stringWithContentsOfFile:encoding:error:", "contentsAtPath:",
-                   "fileHandleForReadingAtPath:", "pathForResource:ofType:",
+    # 类方法只覆盖 +dataWithContentsOfFile: 一类；字节码可经 objc_msgSend 直接调用
+    # 实例 init 族绕过类方法，故两者都必须拦截（上一轮真机零命中的直接教训）。
+    for marker in ["ProbeInstallHostInterceptors",
+                   "@selector(dataWithContentsOfFile:)",
+                   "@selector(initWithContentsOfFile:)",
+                   "@selector(dataWithContentsOfURL:)",
+                   "@selector(initWithContentsOfURL:)",
+                   "stringWithContentsOfFile:encoding:error:",
+                   "initWithContentsOfFile:encoding:error:",
+                   "contentsAtPath:",
+                   "fileExistsAtPath:isDirectory:",
+                   "contentsOfDirectoryAtPath:error:",
+                   "fileHandleForReadingAtPath:",
+                   "pathForResource:ofType:",
+                   "bundleWithURL:",
                    "int access(const char *path, int mode)",
-                   "DIR *opendir(const char *path)"]:
+                   "DIR *opendir(const char *path)",
+                   "int stat(const char *restrict path, struct stat *restrict sb)",
+                   "int lstat(const char *restrict path, struct stat *restrict sb)",
+                   "off_t lseek(int fd, off_t offset, int whence)",
+                   "int fstat(int fd, struct stat *sb)",
+                   "int close(int fd)",
+                   "F_GETPATH"]:
         if marker not in implementation:
             fail("ProbeResourceTrace.m 缺少宿主通道入口：{}".format(marker))
+    # dlsym 必须取与定义同代的 stat 符号：x86_64 上混用 _stat 与 _stat$INODE64
+    # 会因 struct stat 布局不同读到垃圾值。
+    if 'PROBE_STAT_SYMBOL' not in implementation or \
+            '"stat$INODE64"' not in implementation:
+        fail("ProbeResourceTrace.m 缺少 stat 的 $INODE64 同代符号处理")
     if "CampusProbeTraceOptionsHostChannels" not in probe:
         fail("诊断入口没有启用宿主通道观察")
-    # 自检必须覆盖宿主通道：未命中不得宣称窗口有效。
-    if "record->calls >= probePaths.count" not in implementation:
-        fail("宿主通道自检断言缺失：未命中就不得启用窗口")
+    # 自检判据必须同时接受 target 与 scoped：opendir/目录枚举只能命中 scoped，
+    # 只看 target 会让目录类通道永久显示“自检未命中”，把可信结果误报成不可信。
+    if "record->calls > 0 && (record->target > 0 || record->scoped > 0)" not in implementation:
+        fail("宿主通道自检判据缺失：目录类通道只命中 scoped，不得只看 target")
+    if "selfChecked" not in implementation:
+        fail("宿主通道必须逐条标注自检命中，否则零命中无法解释")
+    # 宿主通道不得参与窗口否决：任一通道的平台差异都不应作废整轮真机运行。
+    host_block = implementation[implementation.index("if (hostChannels) {",
+        implementation.index("BOOL valid =")):]
+    if "valid = valid && record->selfChecked" in host_block:
+        fail("宿主通道自检不得否决窗口有效性")
     tests = read(TOOLS / "ProbeTests.m")
     if "CheckHostChannelTrace" not in tests:
         fail("桩测试缺少宿主通道场景 CheckHostChannelTrace")
+    # 上一轮真机零命中的盲区通道必须各自有断言，防止只测旧通道就通过。
+    for case in ["NSDataInit", "NSStringInit", "opendir", "stat", "fd"]:
+        if '"{}"'.format(case) not in tests:
+            fail("桩测试缺少宿主通道场景断言：{}".format(case))
 
 
 def main():

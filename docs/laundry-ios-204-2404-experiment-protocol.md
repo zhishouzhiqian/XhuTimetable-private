@@ -105,29 +105,83 @@ Windows 已执行静态接线检查、构建脚本的 Bash 语法检查，以及
 
 AVMP/uvm 宿主函数表（165 项）里**没有 `fopen/open/read/fread/stat`**，字节码读内容只能经 `objc_msgSend` 调 Foundation，探测路径用 `access/lstat/opendir/readdir`。app 级 `fopen/open` interposer 只覆盖自身命名空间、看不到 Foundation 内部读取。两者叠加使 fopen/open **必然零命中**，与 SDK 是否读文件无关。继续加 fopen/open hook 无意义。
 
-## 宿主通道对照轮（下一轮设备验证）
+## 修订 f615ff0 的设备回报：宿主通道第一轮（证伪上一轮方法）
 
-本轮已在 `ProbeResourceTrace` 落地宿主通道观察（`CampusProbeTraceOptionsHostChannels`），诊断入口默认启用。它能区分的、与不能下的结论：
+变体「主图同长度全零」，检查修订 `f615ff0`，自检通过。关键读数：
 
-| 观察 | 能证明 | 不能证明 |
+| 观察项 | 数值 |
+| --- | --- |
+| 宿主通道调用合计 | 103（NSData 4 / NSString 1 / NSFileManager 18 / access 28 / opendir 52） |
+| 目标命中（`yw_1222*.jpg`） | **0，全部通道** |
+| 目录内（对照目录） | **0，全部阶段** |
+| fopen / open | 0 / 0 |
+| 阶段分布 | SDK 初始化 98、签名后 5、**AppKey 阶段 0** |
+| 错误码 | 204 / 2404（未变） |
+
+两组独立统计自洽：各通道调用合计 103 = 阶段「目录外」增量合计 103，说明观察器工作正常、数据可信。
+
+**这轮证伪了上一轮的假设。** 上一轮判断「字节码只能经 objc_msgSend 调 Foundation，swizzle 类方法即可覆盖」，覆盖面不够：
+
+1. 只 swizzle 了**类方法**（`+dataWithContentsOfFile:` 等），漏掉实例 `init` 族——字节码经 objc_msgSend 完全可以直接调 `[[NSData alloc] initWithContentsOfFile:]` 绕过类方法。
+2. 主动移除了 `stat`/`lstat`（当时担心 `$INODE64`），而 SGMain IR 里 `stat` 有 **36 处调用点**，是覆盖面最大的文件原语。
+
+### 由此确立的两条硬事实
+
+**A. SDK 确实读了对照目录里的主图，但没走任何已覆盖通道。**
+目标命中按**文件 basename** 匹配，与目录前缀无关，所以 `/var` 与 `/private/var` 这类规范化差异不能解释零命中。而错误码随那份图的存在性与内容变化（缺图 203 / 全零 204），说明它必然被读到。结论只能是：**它走了本轮之前未覆盖的入口**，缺口是确定的、可闭合的。
+
+**B. C 层 hook 对 SDK 调用有效，`fopen=0` 是真阴性而非观察失效。**
+已用 `tools/audit_probe_source_consistency.py` 之外的脚本核对：四个 framework 的每个 slice 都是 `ar` 归档、无 `LC_ID_DYLIB`，即**静态库**。SGMain 的未定义符号在链接期绑定到 app 内我们的定义。旁证是计数关系：
+
+| 原语 | SGMain IR 调用点 | 真机命中 |
 | --- | --- | --- |
-| `NSData/NSString/NSFileManager` 通道对 `yw_1222*.jpg` 目标命中 >0 | 字节码确实经 Foundation 读了目标图片 | 读后如何解析、拒绝在哪一步 |
-| 目标命中且「内容一致」计数 >0 | 读到的就是我们改的那份图 | 代际/字段语义 |
-| `access/opendir` 命中对照目录 | 路径探测发生在该目录 | 内容是否被消费 |
-| 全部宿主通道仍零命中 | 在已覆盖入口内未观察到 | SDK 没读文件（可能走未覆盖通道/内存预置表） |
+| `access` | 17 | 28 |
+| `opendir` | 6 | 52 |
+| `fopen` | 27 | **0** |
 
-设备步骤（每个变体一个新进程，沿用 §第一轮）：
+真机命中**超过** IR 调用点，差额来自 AVMP 字节码经宿主表调用（宿主表内有 `access`/`opendir`）。既然 `access`/`opendir` 能被抓到，`fopen` 的 0 就是真结果。
 
-1. 先跑 `baseline`：确认宿主通道自检通过（报告含「宿主通道说明」行且各通道自检命中），并复现 204/2404。
-2. 再跑 `main-zero`（或 `main-random`）：对比宿主通道行——
-   - **NSData/NSFileManager 目标命中 >0 且内容「不同」>0** → 直接坐实「解析器读到了被改坏的主图」，根因锁定在字节码解析层；下一步只剩「同代 SDK + 配套图片」这一条正路（见 rootcause 文档路线 A）。
-   - **命中但内容「一致」** → 命中的是别的副本或缓存，回到路径/派生文件排查（对照 C：只在主 Bundle 放图）。
-   - **全零** → 记录为「已覆盖入口内未观察到」，改查未覆盖通道（如 `mmap`、`NSFileHandle` 变体）或内存预置表，不宣称没读文件。
+**C. `stat` 在真机 arm64 上会绑定到探针定义。**
+IR 的 target triple 是 `arm64-apple-ios9.0.0`，且 `stat`/`lstat`/`fopen` 等全部是**纯符号，`$INODE64` 计数为 0**。`$INODE64` 重定向只存在于 x86_64 macOS，不影响真机。核对脚本：`build/laundry-ios-analysis/check_stat_symbol_binding.py`。
+
+## 第二轮覆盖面：补齐三处盲区（本轮已落地，待设备验证）
+
+在 §宿主通道对照轮 的基础上补全，使「零命中」变成可解释的结论而非方法缺陷：
+
+| 盲区 | 本轮补法 |
+| --- | --- |
+| 实例 `init` 族 | swizzle `-initWithContentsOfFile:`、`-initWithContentsOfFile:options:error:`、`-initWithContentsOfURL:`（NSData 与 NSString） |
+| `stat`/`lstat` | 重新拦截；`#undef` 防御 + `PROBE_STAT_SYMBOL` 处理 x86_64 的 `$INODE64` 同代符号，避免 dlsym 取到布局不同的旧 ABI |
+| fd 级 | 拦截 `lseek`/`fstat`，用 `fcntl(F_GETPATH)` 反查路径并缓存；`close` 淘汰缓存槽，防 fd 号复用误判 |
+
+同时新增：`NSData/NSString` 的 URL 形态、`-[NSFileManager fileExistsAtPath:isDirectory:]`、`-contentsOfDirectoryAtPath:error:`、`+[NSBundle bundleWithURL:]`、`-pathForResource:ofType:inDirectory:`。
+
+**移除 `read`/`pread` 拦截**：AVMP 宿主表里没有这两个入口（只有 `lseek`/`fstat`/`fcntl`），而它们是全进程最热路径，收益低风险高。fd 级观察由 `lseek`/`fstat` 触发即可，字节内容改由 Foundation swizzle 的返回值做摘要比对。
+
+**每条通道新增 `自检命中` 标注**，这是本轮最重要的判读改进：上一轮零命中无法区分「SDK 没读」与「我没覆盖」，现在自检未命中的通道会在报告里明确标为不可信。自检判据是 `target>0 || scoped>0`——目录类通道（`opendir`、`contentsOfDirectoryAtPath:`）只可能命中 `scoped`，只看 `target` 会让它们永久显示「未命中」。宿主通道自检**不再否决窗口有效性**，否则任一通道的平台差异就会作废整轮真机运行。
+
+## 第二轮判定矩阵（H1 / H2）
+
+静态分析已排除「注册表 miss」（miss 返回 `1064399xx` 大数，观测是 `raw=3/4`），所以 raw=4 必然来自 AVMP 字节码执行。但 **AppKey 阶段宿主通道调用为 0**，字节码跑了却没产生可观察的文件访问。结合五组内容变体（原图/全零/仅头 16 字节/截断/随机）**全部返回 204**，存在两个互斥假设：
+
+| | H1：读得到，但我没覆盖 | H2：根本没读内容 |
+| --- | --- | --- |
+| 机制 | 经未覆盖的 ObjC selector 或 `stat`/`openat` 读取，解析后拒绝 | `stat` 存在性检查通过（→不是 raw 3），随后在**读内容之前**就失败返回 4，例如程序自身环境/配套数据校验失败 |
+| 根因含义 | 6.8 图片喂 5.6 SDK 的**代际不兼容**成立 | 该根因被推翻，指向 **SDK 侧组件缺失** |
+| 第二轮预期 | 新增通道对目标出现命中，且 `main-zero` 的内容「不同」>0 | 所有通道仍零命中，但 `stat` 通道对照目录出现命中（存在性检查被观察到） |
+
+**关键区分点**：第二轮若 `stat` 通道命中目标图片而所有**内容型**通道（NSData/NSDataInit/NSString/NSStringInit/NSFileManager/NSFileHandle）仍零命中，即支持 H2——它只检查了存在性，从未读取内容。此时错误码 4 来自读内容之前的校验，继续加文件读取 hook 无意义，应转查 SDK 配套数据/环境要求。
+
+设备步骤沿用 §第一轮（每个变体一个新进程，`baseline` + `main-zero`）。
 
 约束不变：不改错误返回值、不跳过安全校验、不把非空但不完整字典当作签名成功、不向构建上传安全资源。
 
+## 一个已排除的替代方案
+
+已核对公开 SDK 包（`build/campus-ios-probe/public-sdk.zip`，2902 条目）：**`.jpg` 条目为 0**，无任何 `yw_` 安全图片。即公开百川包不自带配套安全图片，「同代 SDK + 自有 appkey 图片」这条正路无法在本地构造对照，必须外部申请。
+
 ## 验证状态（本轮）
 
-Windows 已执行：`tools/check_campus_probe_wiring.py`（通过）、`bash -n tools/build_campus_ios_probe.sh`（通过）、`tools/audit_sg_appkey_dispatch.py` 与 `tools/audit_sg_bitcode_coverage.py`（对本地 IR 产物运行通过，复现上文全部分发链/映射/宿主表结论）、资源准备与审计的 Python 单元测试（5+6+7 项 OK）。
+Windows 已执行：`tools/check_campus_probe_wiring.py`（通过）、`tools/audit_probe_source_consistency.py`（通过：括号平衡、函数指针配对、通道名与报告一致、自检判据、递归抑制）、`bash -n tools/build_campus_ios_probe.sh`（通过）、资源准备与审计的 Python 单元测试（5+6+7 项 OK）、`build/laundry-ios-analysis/check_stat_symbol_binding.py` 与 `check_framework_linkage.py`（复现上文 B/C 两条硬事实）。
 
-本机无 Xcode：`ProbeResourceTrace` 宿主通道 swizzle、`ProbeTests.m` 新增的 `CheckHostChannelTrace` 与 case 13 宿主断言**未编译、未在真机运行**，仅经逐行复核与静态接线检查。宿主通道能否命中，须由下一轮 Codemagic `ios-component-check` 构建 + iPhone 对照验证。
+本机无 Xcode：`ProbeResourceTrace` 新增通道、`ProbeTests.m` 的 `CheckHostChannelTrace` 断言**未编译、未在真机运行**，仅经逐行复核与静态接线检查。已在源码内修掉三类会导致白跑或崩溃的缺陷：fd 级自检多调 `open` 会抬高计数使窗口被判无效；持锁路径调用 `fstat` 会自死锁；x86_64 上 dlsym 取错 `stat` 同代符号会读到垃圾值。能否命中须由下一轮 Codemagic `ios-component-check` 构建 + iPhone 对照验证。

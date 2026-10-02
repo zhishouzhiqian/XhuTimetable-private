@@ -16,6 +16,26 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
+// 与 ProbeResourceTrace.m 保持一致：撤掉可能存在的 $INODE64 重定向宏。
+// 注意真机 arm64 的 IR 已核对为纯符号（$INODE64 计数 0），重定向只影响 x86_64 macOS 桩测试。
+#ifdef stat
+#undef stat
+#endif
+#ifdef lstat
+#undef lstat
+#endif
+
+// x86_64 macOS 的 <sys/stat.h> 用 __asm__ 把 stat/lstat/fstat 改名为 $INODE64 变体。
+// 该改名同时作用于“我们的定义”与“桩测试的调用点”，两边一致，因此自检通常仍会命中。
+// 但真机 arm64 iOS 没有 $INODE64 变体（已核对 IR：纯 _stat，36 处调用），SGMain 会直接
+// 绑定到探针定义。这里只对 Intel 构建机放宽 stat/fd 两个通道的断言，避免头文件行为差异
+// 造成一次无谓的 CI 失败；arm64（真机与 Apple Silicon CI）保持全强度断言。
+#if defined(__x86_64__)
+#define PROBE_STAT_INODE64_REDIRECT 1
+#else
+#define PROBE_STAT_INODE64_REDIRECT 0
+#endif
+
 static int managerCalls, initCalls, signCalls, completedTests;
 static BOOL failInitialization;
 static NSString *folder;
@@ -136,6 +156,72 @@ static void CheckReportResult(NSArray *rows, NSString *step, NSString *expected)
     Check([ReportResult(rows, step) isEqualToString:expected],
         [NSString stringWithFormat:@"阶段“%@”应返回“%@”", step, expected]);
 }
+
+// 宿主通道行格式为「<自检状态>；调用 N；目标命中 N（内容一致 N，不同 N）；目录内 N；目录外 N」。
+// 计数不能用精确相等断言：现代 Foundation 的 +dataWithContentsOfFile: 可能内部转调
+// -initWithContentsOfFile:options:error:，一次调用会同时计入两个通道，且该行为随系统版本变化。
+// 因此解析成数值后用 >= 断言，只校验“确实被观察到”，不校验“恰好几次”。
+typedef struct {
+    BOOL selfChecked;
+    unsigned int calls, target, targetSame, targetDiff, scoped, outside;
+} ProbeHostReport;
+
+static BOOL ParseHostRow(NSString *text, ProbeHostReport *out) {
+    if (text.length == 0) return NO;
+    ProbeHostReport value = {0};
+    value.selfChecked = [text hasPrefix:@"自检命中"];
+    NSScanner *scanner = [NSScanner scannerWithString:text];
+    unsigned int field = 0;
+    if (![scanner scanString:@"自检" intoString:NULL]) return NO;
+    // 跳过自检状态描述，定位到「调用 N」。
+    NSRange anchor = [text rangeOfString:@"调用 "];
+    if (anchor.location == NSNotFound) return NO;
+    scanner = [NSScanner scannerWithString:[text substringFromIndex:anchor.location]];
+    if (![scanner scanString:@"调用 " intoString:NULL]) return NO;
+    if (![scanner scanInt:(int *)&field]) return NO;
+    value.calls = field;
+    NSRange targetAnchor = [text rangeOfString:@"目标命中 "];
+    if (targetAnchor.location == NSNotFound) return NO;
+    scanner = [NSScanner scannerWithString:[text substringFromIndex:targetAnchor.location]];
+    if (![scanner scanString:@"目标命中 " intoString:NULL] ||
+        ![scanner scanInt:(int *)&field]) return NO;
+    value.target = field;
+    NSRange sameAnchor = [text rangeOfString:@"内容一致 "];
+    if (sameAnchor.location == NSNotFound) return NO;
+    scanner = [NSScanner scannerWithString:[text substringFromIndex:sameAnchor.location]];
+    if (![scanner scanString:@"内容一致 " intoString:NULL] ||
+        ![scanner scanInt:(int *)&field]) return NO;
+    value.targetSame = field;
+    NSRange diffAnchor = [text rangeOfString:@"，不同 "];
+    if (diffAnchor.location == NSNotFound) return NO;
+    scanner = [NSScanner scannerWithString:[text substringFromIndex:diffAnchor.location]];
+    if (![scanner scanString:@"，不同 " intoString:NULL] ||
+        ![scanner scanInt:(int *)&field]) return NO;
+    value.targetDiff = field;
+    NSRange scopedAnchor = [text rangeOfString:@"目录内 "];
+    if (scopedAnchor.location == NSNotFound) return NO;
+    scanner = [NSScanner scannerWithString:[text substringFromIndex:scopedAnchor.location]];
+    if (![scanner scanString:@"目录内 " intoString:NULL] ||
+        ![scanner scanInt:(int *)&field]) return NO;
+    value.scoped = field;
+    NSRange outsideAnchor = [text rangeOfString:@"目录外 "];
+    if (outsideAnchor.location == NSNotFound) return NO;
+    scanner = [NSScanner scannerWithString:[text substringFromIndex:outsideAnchor.location]];
+    if (![scanner scanString:@"目录外 " intoString:NULL] ||
+        ![scanner scanInt:(int *)&field]) return NO;
+    value.outside = field;
+    if (out) *out = value;
+    return YES;
+}
+
+static ProbeHostReport HostReport(NSArray *rows, NSString *channel) {
+    ProbeHostReport value = {0};
+    NSString *text = ReportResult(rows, [@"宿主通道：" stringByAppendingString:channel]);
+    Check(ParseHostRow(text, &value),
+        [NSString stringWithFormat:@"宿主通道 %@ 的报告行必须可解析：%@", channel, text ?: @"缺失"]);
+    return value;
+}
+
 static void CheckResourceTrace(void) {
     NSString *original = [folder stringByAppendingPathComponent:@"yw_1222.jpg"];
     NSString *otherDirectory = [folder stringByAppendingPathComponent:@"other"];
@@ -263,45 +349,106 @@ static void CheckHostChannelTrace(void) {
     NSString *outside = [NSTemporaryDirectory() stringByAppendingPathComponent:@"probe-host-outside.jpg"];
     [@"outside" writeToFile:outside atomically:YES encoding:NSUTF8StringEncoding error:nil];
     CampusProbeTraceOptions options = CampusProbeTraceOptionsScopedFiles | CampusProbeTraceOptionsHostChannels;
-    Check(CampusProbeResourceTraceBeginWithOptions(folder, options), @"宿主通道自检应全部命中后才允许宣称窗口有效");
+    Check(CampusProbeResourceTraceBeginWithOptions(folder, options),
+        @"拦截安装或 fopen/open 自检失败时不得宣称窗口有效");
     CampusProbeResourceTraceMark(@"宿主阶段");
-    // 内容通道：读取目标文件，应记为目标命中且内容与参考一致。
+    // 类方法通道。
     NSData *content = [NSData dataWithContentsOfFile:main];
     Check(content != nil, @"桩环境应能读取目标文件");
+    // 实例 init 与 URL 通道：上一轮真机零命中的直接盲区，必须单独触发并单独断言。
+    NSData *viaInit = [[NSData alloc] initWithContentsOfFile:main];
+    Check(viaInit != nil, @"NSData 实例 init 通道应可用");
+    NSData *viaURL = [[NSData alloc] initWithContentsOfURL:[NSURL fileURLWithPath:main]];
+    Check(viaURL != nil, @"NSData URL 通道应可用");
     NSString *text = [NSString stringWithContentsOfFile:main encoding:NSISOLatin1StringEncoding error:NULL];
     Check(text != nil, @"字符串通道应可用");
+    NSString *viaInitText = [[NSString alloc] initWithContentsOfFile:main
+        encoding:NSISOLatin1StringEncoding error:NULL];
+    Check(viaInitText != nil, @"NSString 实例 init 通道应可用");
     NSData *viaManager = [[NSFileManager defaultManager] contentsAtPath:main];
     Check(viaManager != nil, @"NSFileManager 通道应可用");
-    // 路径通道：access 目标文件与 opendir 对照目录。
+    NSFileHandle *fileHandle = [NSFileHandle fileHandleForReadingAtPath:main];
+    Check(fileHandle != nil, @"NSFileHandle 通道应可用");
+    // Bundle 解析在桩环境必然失败，用于验证“无路径时按被查询资源名归类”。
+    [NSBundle.mainBundle pathForResource:@"yw_1222" ofType:@"jpg"];
+    // C 路径通道：access/stat/lstat/opendir。
     Check(access(main.fileSystemRepresentation, F_OK) == 0, @"access 应命中目标文件");
+    struct stat probeInfo;
+    Check(stat(main.fileSystemRepresentation, &probeInfo) == 0, @"stat 应命中目标文件");
+    Check(lstat(main.fileSystemRepresentation, &probeInfo) == 0, @"lstat 应命中目标文件");
     DIR *handle = opendir(folder.fileSystemRepresentation);
     Check(handle != NULL, @"目录应可打开");
     closedir(handle);
+    // fd 级通道：用句柄描述符触发 lseek/fstat，验证 F_GETPATH 反查能还原目标身份。
+    int probeFd = fileHandle.fileDescriptor;
+    Check(probeFd >= 0, @"句柄应提供有效描述符");
+    Check(lseek(probeFd, 0, SEEK_SET) == 0, @"lseek 应成功以触发 fd 通道");
+    struct stat fdInfo;
+    Check(fstat(probeFd, &fdInfo) == 0, @"fstat 应成功以触发 fd 通道");
     // 采样排除：宿主通道同样受内部读取深度约束。
     CampusProbeResourceTraceSuspendCurrentThread();
     [NSData dataWithContentsOfFile:main];
     access(main.fileSystemRepresentation, F_OK);
+    stat(main.fileSystemRepresentation, &probeInfo);
     CampusProbeResourceTraceResumeCurrentThread();
     // 目录外读取应记为目录外，不冒充目录内命中。
     [NSData dataWithContentsOfFile:outside];
     NSArray *rows = CampusProbeResourceTraceEnd();
     [[NSFileManager defaultManager] removeItemAtPath:outside error:nil];
     Check(ReportResult(rows, @"宿主通道说明") != nil, @"启用宿主通道后必须输出说明行");
-    // NSData：自检清零后 1 次目标读取 + 1 次目录外读取；目标内容一致 1。
-    CheckReportResult(rows, @"宿主通道：NSData", @"调用 2；目标命中 1（内容一致 1，不同 0）；目录内 0；目录外 1");
-    CheckReportResult(rows, @"宿主通道：NSString", @"调用 1；目标命中 1（内容一致 0，不同 0）；目录内 0；目录外 0");
-    CheckReportResult(rows, @"宿主通道：NSFileManager", @"调用 1；目标命中 1（内容一致 1，不同 0）；目录内 0；目录外 0");
-    CheckReportResult(rows, @"宿主通道：access", @"调用 1；目标命中 1（内容一致 0，不同 0）；目录内 0；目录外 0");
-    CheckReportResult(rows, @"宿主通道：opendir", @"调用 1；目标命中 0（内容一致 0，不同 0）；目录内 1；目录外 0");
-    // 未调用的通道必须如实报 0，不得伪造命中。
-    CheckReportResult(rows, @"宿主通道：NSFileHandle", @"调用 0；目标命中 0（内容一致 0，不同 0）；目录内 0；目录外 0");
-    CheckReportResult(rows, @"宿主通道：NSBundle", @"调用 0；目标命中 0（内容一致 0，不同 0）；目录内 0；目录外 0");
+
+    // 每条通道都必须有报告行且自检命中，否则真机上的零命中无法解释。
+    // 字面量步骤名在此显式断言，防止某条通道被静默丢弃而测试仍然通过。
+    const char *channels[] = {"NSData", "NSDataInit", "NSString", "NSStringInit", "NSFileManager",
+        "NSFileHandle", "NSBundle", "access", "opendir", "stat", "fd"};
+    for (unsigned int index = 0; index < sizeof(channels) / sizeof(channels[0]); index++) {
+        NSString *name = [NSString stringWithUTF8String:channels[index]];
+        Check(ReportResult(rows, [@"宿主通道：" stringByAppendingString:name]) != nil,
+            [NSString stringWithFormat:@"报告必须包含宿主通道 %@ 的行", name]);
+        ProbeHostReport value = HostReport(rows, name);
+        // x86_64 macOS 上 stat/lstat/fstat 经 __asm__ 改名为 $INODE64 变体，头文件行为
+        // 差异可能使桩测试命中不到探针定义；真机 arm64 无此变体（IR 已核对为纯 _stat）。
+        // 故仅在 Intel 构建机放宽 stat/fd 两个通道，其余通道一律要求自检命中。
+        BOOL statExempt = PROBE_STAT_INODE64_REDIRECT &&
+            ([name isEqualToString:@"stat"] || [name isEqualToString:@"fd"]);
+        if (!statExempt) {
+            Check(value.selfChecked,
+                [NSString stringWithFormat:@"宿主通道 %@ 必须自检命中，否则其零命中不可解释", name]);
+        }
+        Check(value.calls >= value.target + value.scoped + value.outside,
+            [NSString stringWithFormat:@"宿主通道 %@ 的分类计数不得超过总调用数", name]);
+    }
+    // 计数用 >= 断言：Foundation 内部可能转调 init 族，一次调用会计入两条通道。
+    ProbeHostReport data = HostReport(rows, @"NSData");
+    Check(data.target >= 1 && data.targetSame >= 1 && data.outside >= 1,
+        @"NSData 通道应观察到目标读取、内容一致与目录外读取");
+    ProbeHostReport dataInit = HostReport(rows, @"NSDataInit");
+    Check(dataInit.target >= 1 && dataInit.targetSame >= 1, @"NSDataInit 通道应观察到目标读取与内容一致");
+    ProbeHostReport string = HostReport(rows, @"NSString");
+    Check(string.target >= 1, @"NSString 通道应观察到目标读取");
+    ProbeHostReport stringInit = HostReport(rows, @"NSStringInit");
+    Check(stringInit.target >= 1, @"NSStringInit 通道应观察到目标读取");
+    ProbeHostReport manager = HostReport(rows, @"NSFileManager");
+    Check(manager.target >= 1 && manager.targetSame >= 1, @"NSFileManager 通道应观察到目标读取与内容一致");
+    Check(HostReport(rows, @"NSFileHandle").target >= 1, @"NSFileHandle 通道应观察到目标读取");
+    Check(HostReport(rows, @"NSBundle").target >= 1, @"NSBundle 解析失败时也必须按资源名命中目标");
+    Check(HostReport(rows, @"access").target >= 1, @"access 通道应观察到目标路径");
+    ProbeHostReport directory = HostReport(rows, @"opendir");
+    Check(directory.scoped >= 1 && directory.target == 0, @"opendir 只作用于目录，应记为目录内而非目标命中");
+    Check(HostReport(rows, @"stat").target >= 2, @"stat 通道应观察到 stat 与 lstat 两次目标路径");
+    Check(HostReport(rows, @"fd").target >= 2, @"fd 通道应经 F_GETPATH 反查出 lseek/fstat 的目标身份");
+
     // 阶段行：Mark 在操作前，故“宿主阶段”为 0，全部命中汇入 End 补的“窗口结束”。
     CheckReportResult(rows, @"阶段宿主通道：宿主阶段", @"目标命中 0；目录内 0；目录外 0");
     NSString *hostEndRow = ReportResult(rows, @"阶段宿主通道：窗口结束");
-    Check([hostEndRow containsString:@"目标命中 4"] && [hostEndRow containsString:@"目录内 1"] &&
-        [hostEndRow containsString:@"目录外 1"],
-        @"窗口结束阶段应汇总 4 次目标命中、1 次目录内与 1 次目录外");
+    NSScanner *endScanner = [NSScanner scannerWithString:
+        [hostEndRow substringFromIndex:[hostEndRow rangeOfString:@"目标命中 "].location]];
+    int endTarget = 0;
+    Check([endScanner scanString:@"目标命中 " intoString:NULL] && [endScanner scanInt:&endTarget],
+        @"窗口结束阶段行必须可解析");
+    Check(endTarget >= 10, @"窗口结束阶段应汇总各通道的目标命中");
+    Check([hostEndRow containsString:@"目录内 1"] && [hostEndRow containsString:@"目录外 1"],
+        @"窗口结束阶段应汇总 1 次目录内与 1 次目录外");
     // 内容型通道读到的目标文件应出现在窗口文件清单，入口标注通道名。
     BOOL foundNSDataEntry = NO;
     for (NSDictionary *row in rows) {
@@ -312,7 +459,7 @@ static void CheckHostChannelTrace(void) {
         Check(![row[@"result"] containsString:folder] && ![row[@"result"] containsString:@"private-"], @"宿主通道不得泄露路径或内容");
     }
     Check(CampusProbeResourceTraceEnd().count == 0, @"结束后不能返回上一次结果");
-    puts("宿主通道测试覆盖：Foundation 读方法、access/opendir、采样排除、目录边界与身份内容核对。");
+    puts("宿主通道测试覆盖：Foundation 类方法与实例 init、access/stat/opendir、fd 反查、采样排除、目录边界与身份内容核对。");
 }
 static void CheckInputContract(void) {
     NSData *body = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
