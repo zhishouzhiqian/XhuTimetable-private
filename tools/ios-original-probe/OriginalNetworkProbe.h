@@ -7,6 +7,8 @@ NSURLRequest *CampusOriginalConfigRequest(NSString *appKey, NSString *utdid, NSS
 NSURLRequest *CampusOriginalConfigRequestChecked(NSString *appKey, NSString *utdid, NSString *ttid,
     NSString *time, NSDictionary *factors, NSString *(^encode)(NSString *), NSString *__autoreleasing *reason);
 BOOL CampusOriginalConfigRequestInScope(NSURLRequest *request);
+NSArray *CampusOriginalConfigPreflight(NSString *appKey, NSString *utdid, NSString *ttid,
+    NSString *time, NSDictionary *factors, NSString *(^encode)(NSString *));
 NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInteger networkError,
     BOOL redirected, BOOL oversized);
 void CampusOriginalConfigSend(NSURLRequest *request, void (^completion)(NSDictionary *));

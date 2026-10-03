@@ -171,12 +171,26 @@ NSArray *CampusOriginalProbeRun(NSDictionary *manifest, NSString *resourceRoot, 
 
 // SDK/设备参数仅存在本次函数及请求内存中；不保存候选 URL 或安全字段。
 static NSURLRequest *ProbeAnonymousRequest(NSDictionary *context, void (^emit)(NSString *, NSString *)) {
-    Class utdidClass = NSClassFromString(@"UTDIDMain");
-    SEL identifier = NSSelectorFromString(@"uniqueGlobalDeviceIdentifier");
+    Class utdidClass = NSClassFromString(@"TBSDKNetworkSDKUtil");
+    SEL identifier = NSSelectorFromString(@"utdid");
     if (!ProbeMethod(utdidClass, identifier, @[], NO)) {
         emit(@"设备上下文", @"原 UTDID 入口类型不匹配；未发送"); return nil;
     }
     id utdid = ((id (*)(id, SEL))objc_msgSend)(utdidClass, identifier);
+    id repeat = ((id (*)(id, SEL))objc_msgSend)(utdidClass, identifier);
+    Class deviceClass = NSClassFromString(@"UTDevice");
+    id direct = ProbeMethod(deviceClass, identifier, @[], NO) ?
+        ((id (*)(id, SEL))objc_msgSend)(deviceClass, identifier) : nil;
+    BOOL stringValue = [utdid isKindOfClass:NSString.class];
+    NSData *decoded = stringValue ? [[NSData alloc] initWithBase64EncodedString:utdid options:0] : nil;
+    BOOL validDevice = stringValue && [utdid length] == 24 && decoded.length == 18;
+    BOOL stable = stringValue && [repeat isKindOfClass:NSString.class] && [utdid isEqualToString:repeat];
+    BOOL same = stringValue && [direct isKindOfClass:NSString.class] && [utdid isEqualToString:direct];
+    emit(@"设备入口", @"原 MTOP 的 TBSDKNetworkSDKUtil.utdid → UTDevice.utdid；不使用 uniqueGlobalDeviceIdentifier");
+    emit(@"UTDID 形状", stringValue ? [NSString stringWithFormat:@"%lu 字符；Base64 解码 %lu 字节；%@（值不展示）",
+        (unsigned long)[utdid length], (unsigned long)decoded.length, validDevice ? @"格式通过" : @"格式不符"] : @"返回值不是字符串");
+    emit(@"UTDID 重复读取", stable ? @"两次一致" : @"不一致或无法读取；不使用随机替代值");
+    emit(@"UTDID 原入口对照", same ? @"MTOP 包装器与 UTDevice 返回值一致" : @"不同或原入口不可用");
     Class appClass = NSClassFromString(@"AppInfo");
     NSMutableArray *parts = [NSMutableArray array];
     for (NSString *name in @[@"channel", @"bundleName", @"version"]) {
@@ -196,6 +210,9 @@ static NSURLRequest *ProbeAnonymousRequest(NSDictionary *context, void (^emit)(N
     }
     emit(@"校园请求 AppKey", [networkKey isEqualToString:context[@"appKey"]] ?
         @"原 AppInfo 返回值与索引 0 一致（值不展示）" : @"原 AppInfo 返回值与索引 0 不同；请求使用原 AppInfo 值（均不展示）");
+    if (!validDevice || !stable || !same) {
+        emit(@"设备上下文", @"格式、稳定性或原入口对照未通过；未发送"); return nil;
+    }
     Class encoder = NSClassFromString(@"TBSDKMTOPEnvConfig");
     SEL encode = NSSelectorFromString(@"urlEncodeString:");
     if (!ProbeMethod(encoder, encode, @[@"@"], NO) || ![utdid isKindOfClass:NSString.class] || ![utdid length]) {
@@ -221,6 +238,9 @@ static NSURLRequest *ProbeAnonymousRequest(NSDictionary *context, void (^emit)(N
     if (!CampusMtopProbeFactorsComplete(factors, error)) {
         emit(@"本次配置查询签名", error ? [NSString stringWithFormat:@"失败（SDK 错误码 %ld）；未发送", (long)error.code] :
             @"字段不完整；未发送"); return nil;
+    }
+    for (NSDictionary *row in CampusOriginalConfigPreflight(networkKey, utdid, ttid, time, factors, encodeValue)) {
+        emit(row[@"step"], row[@"result"]);
     }
     NSString *reason = nil;
     NSURLRequest *request = CampusOriginalConfigRequestChecked(networkKey, utdid, ttid, time, factors, encodeValue, &reason);
@@ -292,7 +312,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     self.report = [[UITextView alloc] init];
     self.report.editable = NO;
     self.report.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.report.text = @"诊断版本：4\n当前运行专用 Application/AppDelegate\n\n离线检查：开启飞行模式并关闭 Wi-Fi。\n联网检查：先连接网络，再手动点击下方联网按钮，仅查询一次匿名公开配置，使用原设备标识但不展示，不登录、不注册设备、不下单。\n原二进制的类加载代码仍可能执行。\n\n每项检查每个进程只执行一次。";
+    self.report.text = @"诊断版本：5\n当前运行专用 Application/AppDelegate\n\n离线检查：开启飞行模式并关闭 Wi-Fi。\n联网检查：先连接网络，再手动点击下方联网按钮，仅查询一次匿名公开配置，使用原设备标识但不展示，不登录、不注册设备、不下单。\n原二进制的类加载代码仍可能执行。\n\n每项检查每个进程只执行一次。";
     [stack addArrangedSubview:self.report];
     self.start = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.start setTitle:@"开始本地检查" forState:UIControlStateNormal];
@@ -316,7 +336,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：4\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：5\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
@@ -340,7 +360,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：4\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：5\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };

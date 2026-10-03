@@ -35,7 +35,7 @@ Windows 可完成打包；iOS 诊断库需要 macOS/Xcode 编译。若只拿到�
 
 启动不会自动发送诊断请求。离线按钮仍要求断网。要执行新的联网阶段，请连接网络，手动点击“联网检查（仅匿名配置）”；每个进程只创建一个检查任务，不能在同一进程重试。不要以飞行模式下的网络错误判断签名失败。
 
-联网阶段先重新核对资源及初始化，使用原 UTDIDMain.uniqueGlobalDeviceIdentifier，不使用前一版的随机临时标识。请求 AppKey 来自原 AppInfo.appKey，报告仅比较其与索引 0 是否相同。TTID 按原 TCSyncLauncher.setupMTOP 的形式，以 AppInfo.channel、bundleName、version 组装 `%@@%@_iPhone_%@`。原主程序 TBSDKRequest.setHTTPRequestHeader 使用 x-pv=6.3；编码由原 TBSDKMTOPEnvConfig.urlEncodeString: 执行，并用合成特殊字符向量及逐项解码一致性验证。
+联网阶段先重新核对资源及初始化。版本 5 使用原 MTOP 的 TBSDKNetworkSDKUtil.utdid，并对照 UTDevice.utdid；不使用随机标识或 uniqueGlobalDeviceIdentifier。请求 AppKey 来自原 AppInfo.appKey，报告仅比较其与索引 0 是否相同。TTID 按原 TCSyncLauncher.setupMTOP 的形式，以 AppInfo.channel、bundleName、version 组装 `%@@%@_iPhone_%@`。原主程序 TBSDKRequest.setHTTPRequestHeader 使用 x-pv=6.3；编码由原 TBSDKMTOPEnvConfig.urlEncodeString: 执行，并用合成特殊字符向量及逐项解码一致性验证。
 
 只允许 HTTPS GET 到 acs.m.taobao.com 的 mtop.tmall.campus.guide.advertising.config.list/1.0，正文固定为 `{}`。秒级时间、UTDID、TTID、AppKey 和正文在签名前固定，签名使用同一份输入；新生成的四个安全字段检查完整后只编码一次。不使用 Cookie、x-sid、x-devid、账号、旧抓包签名或历史注册值。此精简请求尚未完成服务端验收，不能称为已经验证的完整 iOS MTOP 客户端。
 
@@ -85,3 +85,11 @@ macOS 原生桩测试覆盖默认索引/认证参数、空初始化字典、AppK
 用户随后运行版本 3：原配初始化和 AppInfo AppKey 对照均成功，但请求构造返回空值，报告“编码或协议核对失败；未发送”。这不能判断为服务端签名拒绝，也尚不能唯一定位具体失败条件。
 
 版本 4 将拒绝原因细分为 AppKey、UTDID、TTID、时间、安全字段形状、编码向量、具体头字段编码、正文编码和最终线路范围；只输出固定原因及白名单字段名，不输出值。旧编码向量逐字比较会误拒绝 `%7E` 与 `~` 等合法等价表示，现改为保留字符转义及解码完全一致的语义检查，仍阻断漏编码、非法转义和重复编码，不更换 SDK 编码方法。保留 UTDID 24 字符/18 字节约束，没有将随机 UUID 当作原设备标识。原生测试增加等价转义、按原二进制参数执行 CFURL 编码及拒绝原因脱敏；版本 4 编译和真机结果待验证，尚未证实用户本次失败正是向量表示差异造成。
+
+版本 4 用户报告明确返回 UTDID_FORMAT，仍未发送请求。因此本次失败不能归因于服务端或编码向量；向量修正不是已证实的此次根因修复。
+
+重新核对固定样本后发现版本 3/4 选错设备入口：TBSDKMTOPEnvConfig.readUtdid（0x104bc0430）调用 TBSDKNetworkSDKUtil.utdid；该包装器（0x104bc21a0）查找 UTDevice 并调用 utdid。此前 UTDIDMain.uniqueGlobalDeviceIdentifier（0x105aa63a8）使用不同的唯一标识生成路径及 uniqueID 回退，不能当作 MTOP UTDID 使用。这是诊断实现错误，不是 SDK 初始化失败或 LiveContainer 已被证明不支持设备标识。
+
+版本 5 改用上述原调用链，并批量报告字符/解码长度、两次读取稳定性、包装器与 UTDevice 一致性、五组编码向量、九个请求头回读及空正文一致性。长度可展示，设备值不展示；格式、不稳定或入口不一致仍阻断，不使用旧 HAR 或随机值替代。单个头字段预检失败时其它独立编码检查仍继续，最终构造门禁保持严格。此版本仍只发送手动匿名配置查询；尚未完成设备注册、设备 ID 复用或洗衣接入，不将独立标识生成等同于服务端注册成功。
+
+原生桩新增不同形状的旧入口、正确 MTOP 包装器与 UTDevice、无效格式、两次读取变化、双入口不一致以及 15 项编码预检回归，断言旧入口零调用，设备预检失败不签名；Windows 打包测试不执行这些原生桩，版本 5 原生编译和真机联网结果待验证。

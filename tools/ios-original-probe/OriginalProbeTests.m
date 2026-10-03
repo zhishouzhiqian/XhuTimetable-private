@@ -13,6 +13,7 @@ static NSUInteger ProbeTestKeyCalls, ProbeTestInitCalls, ProbeTestSignCalls, Pro
 static NSArray *ProbeTestPreviousFields;
 static NSString *ProbeTestPreviousRequest;
 static NSUInteger ProbeTestConfigSignCalls;
+static NSUInteger ProbeTestLegacyIDCalls, ProbeTestDeviceMode, ProbeTestMtopReadCount;
 
 static NSString *ResultForStep(NSArray *rows, NSString *step) {
     // 同一步会先追加“正在执行”，再追加最终结果；断言必须读取最后一条。
@@ -110,7 +111,30 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
 + (NSString *)uniqueGlobalDeviceIdentifier;
 @end
 @implementation UTDIDMain
-+ (NSString *)uniqueGlobalDeviceIdentifier { return @"AAAAAAAAAAAAAAAAAAAAAAAA"; }
++ (NSString *)uniqueGlobalDeviceIdentifier {
+    ProbeTestLegacyIDCalls++;
+    return @"00000000-0000-0000-0000-000000000000";
+}
+@end
+@interface UTDevice : NSObject
++ (NSString *)utdid;
+@end
+@implementation UTDevice
++ (NSString *)utdid {
+    if (ProbeTestDeviceMode == 1) return @"bad-device";
+    return ProbeTestDeviceMode == 3 ? @"BBBBBBBBBBBBBBBBBBBBBBBB" : @"AAAAAAAAAAAAAAAAAAAAAAAA";
+}
+@end
+@interface TBSDKNetworkSDKUtil : NSObject
++ (NSString *)utdid;
+@end
+@implementation TBSDKNetworkSDKUtil
++ (NSString *)utdid {
+    ProbeTestMtopReadCount++;
+    if (ProbeTestDeviceMode == 2 && ProbeTestMtopReadCount % 2 == 0) return @"BBBBBBBBBBBBBBBBBBBBBBBB";
+    if (ProbeTestDeviceMode == 3) return @"AAAAAAAAAAAAAAAAAAAAAAAA";
+    return [UTDevice utdid];
+}
 @end
 @interface AppInfo : NSObject
 + (NSString *)appKey;
@@ -193,6 +217,14 @@ int main(void) {
         NSCAssert(configRequest != nil && ProbeTestConfigSignCalls == 1, @"原设备与应用入口未能构造匿名候选请求");
         NSCAssert([[configRequest valueForHTTPHeaderField:@"x-utdid"] isEqualToString:@"AAAAAAAAAAAAAAAAAAAAAAAA"] &&
             [[[configRequest valueForHTTPHeaderField:@"x-ttid"] stringByRemovingPercentEncoding] isEqualToString:@"test@campus_iPhone_5.7.2"], @"设备标识或 TTID 与签名输入不同");
+        NSCAssert(ProbeTestLegacyIDCalls == 0 && ProbeTestMtopReadCount == 2, @"使用了旧标识入口或未核对重复读取");
+        for (NSUInteger mode = 1; mode <= 3; mode++) {
+            ProbeTestDeviceMode = mode;
+            ProbeTestMtopReadCount = 0;
+            NSCAssert(CampusOriginalProbeTestRequest(context) == nil, @"无效、不稳定或不一致的设备标识未阻断");
+            NSCAssert(ProbeTestConfigSignCalls == 1 && ProbeTestLegacyIDCalls == 0, @"设备预检失败仍签名或使用错误替代入口");
+        }
+        ProbeTestDeviceMode = 0;
         CampusOriginalNetworkProbeTests();
         puts("原配诊断原生桩测试通过；未执行厂商组件。");
     }

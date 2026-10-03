@@ -11,7 +11,12 @@ static BOOL ProbeText(id value, NSUInteger maximum) {
 }
 
 static NSString *ProbeEncode(NSString *value, NSString *(^encode)(NSString *), NSString *__autoreleasing *reason) {
-    id encoded = encode(value);
+    id encoded = nil;
+    @try { encoded = encode(value); }
+    @catch (NSException *exception) {
+        if (reason) *reason = @"编码入口发生异常（正文隐藏）";
+        return nil;
+    }
     if (!ProbeText(encoded, 65536)) {
         if (reason) *reason = @"编码入口返回空值、类型不符或超限";
         return nil;
@@ -37,6 +42,36 @@ NSURLRequest *CampusOriginalConfigRequest(NSString *appKey, NSString *utdid, NSS
 static NSURLRequest *ProbeReject(NSString *__autoreleasing *reason, NSString *message) {
     if (reason) *reason = message;
     return nil;
+}
+
+NSArray *CampusOriginalConfigPreflight(NSString *appKey, NSString *utdid, NSString *ttid,
+    NSString *time, NSDictionary *factors, NSString *(^encode)(NSString *)) {
+    NSMutableArray *rows = [NSMutableArray array];
+    void (^record)(NSString *, NSString *) = ^(NSString *step, NSString *result) {
+        [rows addObject:@{@"step": step, @"result": result}];
+    };
+    if (!encode) { record(@"编码预检", @"入口缺失"); return rows; }
+    NSUInteger index = 0;
+    for (NSString *vector in @[@"a+b/= %~*", @"中文🙂", @"{}", @"a&b=c", @"100%done"]) {
+        NSString *reason = nil;
+        BOOL ok = ProbeEncode(vector, encode, &reason) != nil;
+        record([NSString stringWithFormat:@"编码向量 %lu", (unsigned long)++index], ok ?
+            @"转义及解码一致性通过" : reason);
+    }
+    NSDictionary *parameters = @{@"x-appkey": appKey ?: @"", @"x-utdid": utdid ?: @"",
+        @"x-ttid": ttid ?: @"", @"x-t": time ?: @"", @"x-pv": @"6.3"};
+    for (NSString *key in @[@"x-appkey", @"x-utdid", @"x-ttid", @"x-t", @"x-pv",
+                          @"x-sign", @"x-mini-wua", @"x-umt", @"x-sgext"]) {
+        id value = parameters[key] ?: ([factors isKindOfClass:NSDictionary.class] ? factors[key] : nil);
+        NSString *reason = nil;
+        if (!ProbeText(value, 16384)) reason = @"缺失、类型、控制字符或长度不符；值不展示";
+        else if (ProbeEncode(value, encode, &reason)) reason = @"原值与编码回读一致；值不展示";
+        record([@"请求头预检 / " stringByAppendingString:key], reason);
+    }
+    NSString *reason = nil;
+    BOOL bodyOK = ProbeEncode(@"{}", encode, &reason) != nil;
+    record(@"正文预检", bodyOK ? @"固定空正文编码回读一致；不重建签名正文" : reason);
+    return [rows copy];
 }
 
 NSURLRequest *CampusOriginalConfigRequestChecked(NSString *appKey, NSString *utdid, NSString *ttid,

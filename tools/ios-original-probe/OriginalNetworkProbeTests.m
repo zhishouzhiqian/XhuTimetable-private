@@ -53,6 +53,24 @@ void CampusOriginalNetworkProbeTests(void) {
         @"1800000000", factors, wrongHeader, &reason);
     NSCAssert(invalidHeader == nil && [reason containsString:@"HEADER_ENCODING（x-sign）"] && ![reason containsString:@"TEST_SIGN"],
         @"具体头编码错误未定位或泄露字段值");
+    NSArray *preflight = CampusOriginalConfigPreflight(@"test-key", utdid, ttid, @"1800000000", factors, originalCFEncode);
+    NSCAssert(preflight.count == 15 && ![preflight.description containsString:@"TEST_SIGN"], @"批量预检缺项或泄露字段值");
+    for (NSDictionary *row in preflight) {
+        NSCAssert([row[@"result"] containsString:@"一致"], @"合法 CFURL 编码批量预检失败");
+    }
+    NSArray *badPreflight = CampusOriginalConfigPreflight(@"test-key", utdid, ttid, @"1800000000", factors, wrongHeader);
+    BOOL badSignObserved = NO, otherHeaderChecked = NO;
+    for (NSDictionary *row in badPreflight) {
+        if ([row[@"step"] isEqualToString:@"请求头预检 / x-sign"]) badSignObserved = [row[@"result"] containsString:@"不同"];
+        if ([row[@"step"] isEqualToString:@"请求头预检 / x-umt"]) otherHeaderChecked = [row[@"result"] containsString:@"一致"];
+    }
+    NSCAssert(badPreflight.count == 15 && badSignObserved && otherHeaderChecked, @"单项失败后没有继续独立预检");
+    NSString *(^throwingHeader)(NSString *) = ^NSString *(NSString *value) {
+        if ([value isEqualToString:@"TEST_SIGN+a/b="]) @throw [NSException exceptionWithName:@"SECRET_EXCEPTION" reason:@"SECRET_BODY" userInfo:nil];
+        return encode(value);
+    };
+    NSArray *exceptionPreflight = CampusOriginalConfigPreflight(@"test-key", utdid, ttid, @"1800000000", factors, throwingHeader);
+    NSCAssert(exceptionPreflight.count == 15 && ![exceptionPreflight.description containsString:@"SECRET"], @"编码异常阻断其它检查或泄露正文");
     NSCAssert(request.HTTPBody == nil && !request.HTTPShouldHandleCookies &&
         [request valueForHTTPHeaderField:@"Cookie"] == nil && [request valueForHTTPHeaderField:@"x-sid"] == nil &&
         [request valueForHTTPHeaderField:@"x-devid"] == nil, @"混入账号或旧注册状态");
