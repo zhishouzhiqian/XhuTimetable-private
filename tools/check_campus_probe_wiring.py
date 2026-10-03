@@ -285,7 +285,6 @@ def check_host_channels():
                    "int lstat(const char *restrict path, struct stat *restrict sb)",
                    "off_t lseek(int fd, off_t offset, int whence)",
                    "int fstat(int fd, struct stat *sb)",
-                   "int close(int fd)",
                    "F_GETPATH"]:
         if marker not in implementation:
             fail("ProbeResourceTrace.m 缺少宿主通道入口：{}".format(marker))
@@ -370,6 +369,7 @@ def main():
     check_outside_classification()
     check_report_hygiene()
     check_brace_balance()
+    check_fd_accounting()
     if failures:
         print("接线检查未通过（{} 项）：".format(len(failures)))
         for item in failures:
@@ -377,6 +377,26 @@ def main():
         return 1
     print("静态接线检查通过；不代表 Objective-C/Swift 编译、原生测试或完整报告脱敏验证通过。")
     return 0
+
+
+def check_fd_accounting():
+    """限定已知回归的文本护栏；原生行为仍由 ProbeTests 验证。"""
+    implementation = read(TOOLS / "ProbeResourceTrace.m")
+    tests = read(TOOLS / "ProbeTests.m")
+    match = re.search(r"static void ProbeObserveFd\([^\n]+\) \{(.*?)\n\}",
+                      implementation, re.DOTALL)
+    if not match:
+        fail("找不到 fd 观察函数")
+        return
+    body = strip_literals(match.group(1))
+    if body.count("ProbeTallyLocked(") != 1 or "calls++" in body or "outside++" in body:
+        fail("fd 必须统一分类一次，不得在分类函数外重复增加计数")
+    if "ProbeFdCache" in implementation:
+        fail("fd 观察不得重新依赖固定槽位或 close 淘汰的路径缓存")
+    for marker in ["CheckFdTraceIdentity();", "dup2(", "pipe(", "descriptorCount = 32",
+                   "value.calls == value.target + value.scoped + value.outside"]:
+        if marker not in tests:
+            fail("fd 回归测试缺少：{}".format(marker))
 
 
 if __name__ == "__main__":

@@ -147,9 +147,8 @@ static void CheckReportResult(NSArray *rows, NSString *step, NSString *expected)
 }
 
 // 宿主通道行格式为「<自检状态>；调用 N；目标命中 N（内容一致 N，不同 N）；目录内 N；目录外 N」。
-// 计数不能用精确相等断言：现代 Foundation 的 +dataWithContentsOfFile: 可能内部转调
-// -initWithContentsOfFile:options:error:，一次调用会同时计入两个通道，且该行为随系统版本变化。
-// 因此解析成数值后用 >= 断言，只校验“确实被观察到”，不校验“恰好几次”。
+// Foundation 的内部转调可能影响观察次数，因此场景中的命中数一般只要求下限。
+// 但每个通道每次观察必须恰好归入目标、目录内或目录外一类，这项恒等式必须精确成立。
 typedef struct {
     BOOL selfChecked;
     unsigned int calls, target, targetSame, targetDiff, scoped, outside;
@@ -310,6 +309,68 @@ static void CheckDiagnosticTrace(void) {
 }
 // 宿主通道：AVMP 字节码不能调用 fopen/open，内容读取只能经 objc_msgSend 走 Foundation；
 // 路径探测走 access/opendir。本测试验证这些通道都被观察且身份/内容可比对。
+static void CheckFdTraceIdentity(void) {
+    NSString *main = [folder stringByAppendingPathComponent:@"yw_1222.jpg"];
+    NSString *outside = [NSTemporaryDirectory() stringByAppendingPathComponent:
+        [@"private-fd-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+    Check([@"outside" writeToFile:outside atomically:YES encoding:NSUTF8StringEncoding error:nil],
+        @"fd 测试的目录外文件应创建成功");
+    // 所有打开动作放在窗口前，窗口内只制造可精确计数的 lseek。
+    enum { descriptorCount = 32 };
+    int descriptors[descriptorCount];
+    for (int i = 0; i < descriptorCount; i++) {
+        descriptors[i] = open(main.fileSystemRepresentation, O_RDONLY);
+        Check(descriptors[i] >= 0, @"fd 测试应打开目标文件");
+    }
+    int outsideFd = open(outside.fileSystemRepresentation, O_RDONLY);
+    Check(outsideFd >= 0, @"fd 测试应打开目录外文件");
+    int pipeFds[2];
+    Check(pipe(pipeFds) == 0, @"fd 测试应创建无文件路径的管道");
+    CampusProbeTraceOptions options = CampusProbeTraceOptionsHostChannels;
+
+    Check(CampusProbeResourceTraceBeginWithOptions(folder, options), @"fd 数量对照窗口应有效");
+    for (int i = 0; i < descriptorCount; i++) {
+        Check(lseek(descriptors[i], 0, SEEK_SET) == 0, @"目标描述符应可定位");
+    }
+    ProbeHostReport many = HostReport(CampusProbeResourceTraceEnd(), @"fd");
+    Check(many.calls == many.target + many.scoped + many.outside, @"fd 调用与分类必须精确守恒");
+    if (many.selfChecked) {
+        Check(many.calls == descriptorCount && many.target == descriptorCount,
+            @"超过旧缓存 24 槽后仍必须逐次计数，且不得重复计数");
+    }
+
+    Check(CampusProbeResourceTraceBeginWithOptions(folder, options), @"fd 身份替换窗口应有效");
+    Check(lseek(descriptors[0], 0, SEEK_SET) == 0, @"替换前应观察到目标身份");
+    Check(dup2(outsideFd, descriptors[0]) == descriptors[0], @"dup2 应替换同一个 fd 的文件身份");
+    Check(lseek(descriptors[0], 0, SEEK_SET) == 0, @"替换后目录外文件应可定位");
+    Check(dup2(descriptors[1], descriptors[0]) == descriptors[0], @"dup2 应恢复目标身份");
+    Check(lseek(descriptors[0], 0, SEEK_SET) == 0, @"恢复后应观察到目标身份");
+    ProbeHostReport replaced = HostReport(CampusProbeResourceTraceEnd(), @"fd");
+    Check(replaced.calls == replaced.target + replaced.scoped + replaced.outside,
+        @"fd 身份替换后的计数必须守恒");
+    if (replaced.selfChecked) {
+        Check(replaced.calls == 3 && replaced.target == 2 && replaced.outside == 1,
+            @"fd 必须按当前身份归类，不能依赖 close 清理旧缓存");
+    }
+
+    Check(CampusProbeResourceTraceBeginWithOptions(folder, options), @"fd 无路径窗口应有效");
+    errno = 0;
+    off_t pipeOffset = lseek(pipeFds[0], 0, SEEK_SET);
+    int pipeError = errno;
+    ProbeHostReport unresolved = HostReport(CampusProbeResourceTraceEnd(), @"fd");
+    Check(pipeOffset == -1 && pipeError == ESPIPE, @"观察器不得改变 lseek 失败结果和 errno");
+    Check(unresolved.calls == unresolved.target + unresolved.scoped + unresolved.outside,
+        @"无法反查路径的 fd 计数必须守恒");
+    if (unresolved.selfChecked) {
+        Check(unresolved.calls == 1 && unresolved.outside == 1 && unresolved.target == 0,
+            @"无法反查路径也必须记录一次调用，不得丢弃或伪造目标身份");
+    }
+    for (int i = 0; i < descriptorCount; i++) close(descriptors[i]);
+    close(outsideFd);
+    close(pipeFds[0]); close(pipeFds[1]);
+    [[NSFileManager defaultManager] removeItemAtPath:outside error:nil];
+}
+
 static void CheckHostChannelTrace(void) {
     NSString *main = [folder stringByAppendingPathComponent:@"yw_1222.jpg"];
     // 目录外文件在窗口开启前创建、结束后删除，避免原子写入的内部
@@ -394,8 +455,8 @@ static void CheckHostChannelTrace(void) {
             Check(value.selfChecked,
                 [NSString stringWithFormat:@"宿主通道 %@ 必须自检命中，否则其零命中不可解释", name]);
         }
-        Check(value.calls >= value.target + value.scoped + value.outside,
-            [NSString stringWithFormat:@"宿主通道 %@ 的分类计数不得超过总调用数", name]);
+        Check(value.calls == value.target + value.scoped + value.outside,
+            [NSString stringWithFormat:@"宿主通道 %@ 的总调用数必须等于分类之和", name]);
     }
     // 计数用 >= 断言：Foundation 内部可能转调 init 族，一次调用会计入两条通道。
     ProbeHostReport data = HostReport(rows, @"NSData");
@@ -695,6 +756,7 @@ int main(void) {
         CheckResourceTrace();
         CheckDiagnosticTrace();
         CheckHostChannelTrace();
+        CheckFdTraceIdentity();
         dispatch_async(dispatch_get_main_queue(), ^{ RunCase(0); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ Check(NO, @"原生测试超时"); });
         dispatch_main();

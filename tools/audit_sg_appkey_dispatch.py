@@ -5,7 +5,7 @@
 1. AppKey 命令 10902 的分发链：
    CMa02JYdt11b9o(10902) → CMa02G3LDtYwUT(1,9,2,flag=1) → 原生注册 CMa02WYLvRCbzL
    → 经 _FUNCTION_BRIDGE slot2 转发到 (1,6,43,0)。
-   验证 (1,6,43,0) 在四个 framework 里都没有原生注册处理器。
+   搜索已加载 IR 中 (1,6,43,0) 的显式常量注册调用；搜索未命中不证明不存在处理器。
 
 2. 统一签名初始化的 2404：SGMiddleTier 的 CMi02Tqa0lTIP5 把底层 raw 小码
    映射为 2400 段（raw 3→2403、raw 4→2404 …）。验证该映射表存在。
@@ -13,7 +13,7 @@
 3. 「宿主通道」假设：候选 SGMain 的 AVMP/uvm 宿主函数注册表
    （_uvm_register_item_ex 数组）里可用的文件入口只有
    access/lseek/fstat/lstat/opendir/readdir/fcntl，没有 fopen/open/read/fread/stat；
-   内容读取只能经 objc_msgSend 调 Foundation。这解释了 fopen/open 零命中
+   字节码可以经 objc_msgSend 调 Foundation；不据此排除其它读取途径。fopen/open 零命中
    不能证明「没读文件」。
 
 依赖本地分析产物（默认 <repo>/build/laundry-ios-analysis，可用 --root 覆盖）：
@@ -111,18 +111,17 @@ def main() -> int:
         for name, hits in reg643.items():
             print(f'    {name}: {hits}')
     else:
-        print('    (1,6,43,0) 在四个 framework 均无原生注册处理器')
-        print('    → AppKey 的图片解析实现只可能来自 AVMP/uvm 字节码（虚拟化查询 66010643），')
-        print('      原生注册表 miss 不会返回内容敏感的 raw 3/4；raw 3/4 由字节码内部产生。')
+        print('    已加载 IR 中未匹配到 (1,6,43,0) 的显式常量注册调用')
+        print('    → 虚拟化查询 66010643 是待追踪线索；未覆盖模块、动态注册与实际执行分支仍待核对。')
 
     check_unified_mapping(sgmid)
     check_host_registry(sgmain)
 
     print('\n== 结论（静态证据支持，非「已证明」）==')
     print('  - 204 与 2404 分别是底层 raw=4 在 SGMain(+200) 与 SGMiddleTier(2400 段) 的出口视图。')
-    print('  - raw=3(无文件)/raw=4(格式错误) 随主图存在性与内容变化 → 解析确实读到并校验了主图字节。')
-    print('  - 解析器位于 AVMP 字节码，宿主表无 fopen/open → app 级 fopen/open 拦截必然零命中，')
-    print('    必须改观察 access/opendir/readdir + Foundation 读方法（见 ProbeResourceTrace 宿主通道）。')
+    print('  - 真机错误对主图存在性有响应；内容变体同码不能证明实际读取、内容无关或资源兼容。')
+    print('  - 已检查宿主表未包含 fopen/open，不能推断所有读取入口或 app 级拦截必然零命中。')
+    print('    宿主自检和源码搜索均不等于完整覆盖厂商运行时调用。')
     return 0
 
 

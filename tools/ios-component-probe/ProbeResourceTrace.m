@@ -54,7 +54,7 @@ typedef struct {
 typedef int ProbeHostChannelIndex;
 
 // 目录外访问的归类。第二轮真机（6f5eb65）出现一个必须解开的矛盾：八组对照证明
-// 错误码对「对照目录里主图是否存在」敏感（缺图 203 / 有图 204，与内容无关），
+// 错误码对「对照目录里主图是否存在」敏感（缺图 203 / 有图 204），
 // 但 11 条已自检命中的通道显示 SDK 对对照目录做了 0 次访问、对 yw_1222*.jpg
 // 目标命中 0、open/fopen/fd 全 0。要解开它，必须知道那 254 次目录外访问去了哪里。
 //
@@ -76,13 +76,6 @@ typedef struct {
     char securityNames[ProbeSecurityNameLimit][ProbeSecurityNameSize];
 } ProbeOutsideRecord;
 
-// fd→路径缓存：read/pread 是热路径，不能每次都做 F_GETPATH 系统调用。
-typedef struct {
-    BOOL used, resolved;
-    int fd;
-    char path[1024];
-} ProbeFdEntry;
-
 typedef struct {
     char stage[96];
     ProbeFileObservation files[2];
@@ -95,7 +88,6 @@ enum {
     ProbeScopedFileLimit = 48,
     ProbeStageMarkLimit = 16,
     ProbeStageNameLimit = 96,
-    ProbeFdCacheLimit = 24,
     ProbeHostChannelNSData = 0,      // +dataWithContentsOfFile: 等类方法
     ProbeHostChannelNSDataInit,      // -initWithContentsOfFile: 等实例方法（上一轮盲区）
     ProbeHostChannelNSString,        // +stringWithContentsOfFile:encoding:error:
@@ -106,7 +98,7 @@ enum {
     ProbeHostChannelAccess,
     ProbeHostChannelOpendir,
     ProbeHostChannelStat,            // stat + lstat：SGMain IR 36+3 处调用
-    ProbeHostChannelFd,              // lseek/fstat/read/pread：fd 级兜底，路径由 F_GETPATH 反查
+    ProbeHostChannelFd,              // lseek/fstat：fd 级观察，路径由 F_GETPATH 反查
     ProbeHostChannelCount,
 };
 
@@ -130,7 +122,6 @@ static size_t ProbeScopeRootLength;
 static char ProbeScopeRootResolved[1024];
 static size_t ProbeScopeRootResolvedLength;
 static ProbeHostRecord ProbeHost[ProbeHostChannelCount];
-static ProbeFdEntry ProbeFdCache[ProbeFdCacheLimit];
 static ProbeOutsideRecord ProbeOutside;
 // app bundle 路径前缀在 Begin 时缓存为 C 字符串，避免在锁内、热路径上反复调
 // NSBundle.mainBundle.bundlePath（stat 一轮命中 150 次）。
@@ -149,7 +140,6 @@ static int (*ProbeOriginalStat)(const char *, struct stat *);
 static int (*ProbeOriginalLstat)(const char *, struct stat *);
 static off_t (*ProbeOriginalLseek)(int, off_t, int);
 static int (*ProbeOriginalFstat)(int, struct stat *);
-static int (*ProbeOriginalClose)(int);
 // 只用于 fd→路径反查，不做拦截：fcntl 是可变参数函数，转发全部 cmd 风险过高。
 static int (*ProbeRealFcntl)(int, int, ...);
 static pthread_once_t ProbeResolveOnce = PTHREAD_ONCE_INIT;
@@ -183,7 +173,6 @@ static void ProbeResolveFopen(void) {
     ProbeOriginalLstat = (int (*)(const char *, struct stat *))dlsym(RTLD_NEXT, PROBE_LSTAT_SYMBOL);
     ProbeOriginalLseek = (off_t (*)(int, off_t, int))dlsym(RTLD_NEXT, "lseek");
     ProbeOriginalFstat = (int (*)(int, struct stat *))dlsym(RTLD_NEXT, PROBE_FSTAT_SYMBOL);
-    ProbeOriginalClose = (int (*)(int))dlsym(RTLD_NEXT, "close");
     ProbeRealFcntl = (int (*)(int, int, ...))dlsym(RTLD_NEXT, "fcntl");
 }
 
@@ -438,8 +427,9 @@ static void ProbeObserveHostPath(ProbeHostChannelIndex channel, const char *path
     ProbeRecordHost(channel, text, -2, nil);
 }
 
-// fd 级观察：先用 F_GETPATH 还原路径（带缓存），再按路径分类。字节码自己没有 open
-// 宿主入口，fd 只能由 Foundation 代开，因此这是“没看见打开动作”时确认身份的唯一手段。
+// 每次观察都重新查询描述符当前路径。Foundation 内部 close、dup2 等未必经过
+// 本宿主的 close 定义；缓存 fd 会误用旧身份，固定槽数也会静默漏报。
+// 这里只观察诊断窗口内的 lseek/fstat，不拦截 read/pread 热路径。
 static void ProbeObserveFd(ProbeHostChannelIndex channel, int fd) {
     if (fd < 0 || ProbeInternalReadDepth > 0 || ProbeHostDepth > 0) return;
     if (!ProbeTraceActive) return;
@@ -448,33 +438,14 @@ static void ProbeObserveFd(ProbeHostChannelIndex channel, int fd) {
         pthread_mutex_unlock(&ProbeTraceMutex);
         return;
     }
-    int slot = -1, freeSlot = -1;
-    for (int i = 0; i < ProbeFdCacheLimit; i++) {
-        if (ProbeFdCache[i].used && ProbeFdCache[i].fd == fd) { slot = i; break; }
-        if (freeSlot < 0 && !ProbeFdCache[i].used) freeSlot = i;
-    }
-    if (slot < 0) {
-        if (freeSlot < 0) { pthread_mutex_unlock(&ProbeTraceMutex); return; }
-        char buffer[1024];
-        buffer[0] = '\0';
-        BOOL ok = ProbeRealFcntl && ProbeRealFcntl(fd, F_GETPATH, buffer) == 0 && buffer[0] != '\0';
-        ProbeFdCache[freeSlot].used = YES;
-        ProbeFdCache[freeSlot].fd = fd;
-        ProbeFdCache[freeSlot].resolved = ok;
-        if (ok) snprintf(ProbeFdCache[freeSlot].path, sizeof(ProbeFdCache[freeSlot].path), "%s", buffer);
-        slot = freeSlot;
-    }
-    ProbeHostRecord *record = &ProbeHost[channel];
-    record->calls++;
-    // F_GETPATH 失败时没有路径可归类，计入 other；不得伪造成某个目录类别。
-    if (!ProbeFdCache[slot].resolved) {
-        record->outside++;
-        ProbeRecordOutsideLocked(NULL);
-        pthread_mutex_unlock(&ProbeTraceMutex);
-        return;
-    }
-    const char *full = ProbeFdCache[slot].path;
-    NSString *text = [NSString stringWithUTF8String:full];
+    char buffer[1024] = {0};
+    ProbeHostDepth++;
+    BOOL resolved = ProbeRealFcntl && ProbeRealFcntl(fd, F_GETPATH, buffer) == 0 && buffer[0] != '\0';
+    ProbeHostDepth--;
+    // 成功与失败统一走一次分类，保证 calls == target + scoped + outside。
+    // 无法反查的描述符仍计入调用及“其它”，不能丢弃观察。
+    const char *full = resolved ? buffer : NULL;
+    NSString *text = full ? [NSString stringWithUTF8String:full] : nil;
     ProbeTallyLocked(channel, full, text, -2, nil);
     pthread_mutex_unlock(&ProbeTraceMutex);
 }
@@ -651,33 +622,7 @@ int fstat(int fd, struct stat *sb) {
 // 不拦截 read/pread：AVMP 宿主表里没有这两个入口（只有 lseek/fstat/fcntl），
 // 而它们是全进程最热路径，拦截收益低、递归与性能风险高。fd 级观察由
 // lseek/fstat 触发即可拿到“SDK 打开过哪个文件”的证据；字节内容改由
-// Foundation swizzle 的返回值做摘要比对。
-
-// close 不计入观察，只用于淘汰 fd→路径缓存：fd 号会被内核复用，
-// 不清理会让新 fd 命中上一条旧路径，把无关文件误判成目标。
-int close(int fd) {
-    int before = errno;
-    pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
-    if (!ProbeOriginalClose) { errno = ENOSYS; return -1; }
-    errno = before;
-    int result = ProbeOriginalClose(fd);
-    int after = errno;
-    // 非活动期缓存必为空（Begin/End 都会清零），直接返回避免每次 close 都抢锁。
-    // ProbeInternalReadDepth 是纵深防御：持锁路径（ProbeObserveFile/ProbeTallyLocked/
-    // ProbeObserveFd）经核实都不会调用 close，但一旦将来新增，这里可避免自死锁。
-    if (result == 0 && fd >= 0 && ProbeTraceActive && ProbeInternalReadDepth == 0) {
-        pthread_mutex_lock(&ProbeTraceMutex);
-        for (int i = 0; i < ProbeFdCacheLimit; i++) {
-            if (ProbeFdCache[i].used && ProbeFdCache[i].fd == fd) {
-                memset(&ProbeFdCache[i], 0, sizeof(ProbeFdCache[i]));
-                break;
-            }
-        }
-        pthread_mutex_unlock(&ProbeTraceMutex);
-    }
-    errno = after;
-    return result;
-}
+// Foundation swizzle 的返回值做摘要比对。没有观察到 lseek/fstat 不排除其它读取途径。
 
 #pragma mark - Foundation 读方法拦截
 
@@ -1027,7 +972,6 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
     ProbeCanaryPath[0] = '\0';
     memset(&ProbeCanary, 0, sizeof(ProbeCanary));
     memset(ProbeHost, 0, sizeof(ProbeHost));
-    memset(ProbeFdCache, 0, sizeof(ProbeFdCache));
     memset(&ProbeOutside, 0, sizeof(ProbeOutside));
     pthread_mutex_unlock(&ProbeTraceMutex);
     // app bundle 前缀在锁外取值（要调 ObjC），只用于把目录外访问归类，不记录完整路径。
@@ -1211,7 +1155,6 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
     ProbeStageMarkCount = 0;
     ProbeCanaryPath[0] = '\0';
     memset(&ProbeCanary, 0, sizeof(ProbeCanary));
-    memset(ProbeFdCache, 0, sizeof(ProbeFdCache));
     // ProbeOutside 必须与 ProbeHost 一起清零：自检阶段也会产生目录外访问，
     // 不清就会把探针自己的 I/O 冒充成 SDK 的行为。ProbeAppBundlePrefix 是配置不是计数，保留。
     memset(&ProbeOutside, 0, sizeof(ProbeOutside));
@@ -1276,7 +1219,6 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
     memset(ProbeStageMarks, 0, sizeof(ProbeStageMarks));
     ProbeStageMarkCount = 0;
     memset(ProbeHost, 0, sizeof(ProbeHost));
-    memset(ProbeFdCache, 0, sizeof(ProbeFdCache));
     memset(&ProbeOutside, 0, sizeof(ProbeOutside));
     ProbeTraceOptions = CampusProbeTraceOptionsTargetsOnly;
     pthread_mutex_unlock(&ProbeTraceMutex);
@@ -1293,7 +1235,7 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
     if (hostEnabled) {
         [rows addObject:@{@"step": @"宿主通道说明",
             @"result": @"统计原生 IR 与 AVMP 宿主表可用的路径/fd 入口及 Foundation 读方法；"
-                        "仅“自检命中”的通道，其目标命中 0 才可解释为该通道未读到目标"}];
+                        "自检只验证宿主测试调用可见；零命中表示未观察到目标，不能排除其它读取途径"}];
         for (int index = 0; index < ProbeHostChannelCount; index++) {
             const ProbeHostRecord *record = &host[index];
             [rows addObject:@{@"step": [@"宿主通道：" stringByAppendingString:
