@@ -1,5 +1,19 @@
 # 个人测试构建；私有 Maven 凭据在 Codemagic 应用级变量组中配置。
 workflows:
+  ios-campus-original-probe:
+    name: iOS 校园原配本地诊断库（未签名）
+    instance_type: mac_mini_m2
+    max_build_duration: 15
+    environment:
+      xcode: "26.2"
+    # 用户手动构建；仅输出诊断库，原 IPA 留在用户电脑。
+    scripts:
+      - name: 验证启动补丁与原生流程并编译诊断库
+        script: |
+          set -euo pipefail
+          bash tools/build_campus_original_probe.sh
+    artifacts:
+      - build/ios-original-probe/CampusOriginalProbe.dylib
   ios-component-check:
     name: iOS 洗衣组件轻量检查（未签名）
     instance_type: mac_mini_m2
