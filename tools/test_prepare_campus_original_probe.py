@@ -15,7 +15,7 @@ def fixture(file_type=2):
     data = bytearray(1536)
     segment = bytearray(232)
     struct.pack_into("<II16sQQQQIIII", segment, 0, 0x19, 232, b"__TEXT", 0x100000000, 2048, 0, 1536, 7, 5, 2, 0)
-    struct.pack_into("<16s16sQQIIIIIIII", segment, 72, b"__text", b"__TEXT", 0x100000200, 128, 512, 2, 0, 0, 0, 0, 0, 0)
+    struct.pack_into("<16s16sQQIIIIIIII", segment, 72, b"__text", b"__TEXT", 0x100000200, 256, 512, 2, 0, 0, 0, 0, 0, 0)
     struct.pack_into("<16s16sQQIIIIIIII", segment, 152, b"__stubs", b"__TEXT", 0x100000320, 24, 800, 2, 0, 0, 8, 0, 12, 0)
     symbols = b"\0_dlopen\0_dlsym\0"
     if file_type == 6: symbols += b"_CampusOriginalProbeMain\0"
@@ -31,7 +31,7 @@ def fixture(file_type=2):
     if file_type == 6: struct.pack_into("<IBBHQ", data, 1056, 16, 15, 1, 0, 0x100000200)
     data[1088:1088 + len(symbols)] = symbols
     struct.pack_into("<II", data, 1200, 0, 1)
-    data[1240:1245] = b"\x80\x04\x80\x01\0"  # 函数 512 与 640。
+    data[1240:1245] = b"\x80\x04\xa4\x01\0"  # 函数 512 与 676，main 范围为 164 字节。
     return bytes(data)
 
 
@@ -44,7 +44,7 @@ class OriginalProbeTests(unittest.TestCase):
         original = fixture()
         patched = self.patch_fixture(original)
         info = probe.layout(original)
-        allowed = set(range(info["header_end"], info["header_end"] + len(probe.LIBRARY_PATH) + len(probe.ENTRY_SYMBOL) + 2)) | set(range(512, 604))
+        allowed = set(range(512, 604 + len(probe.LIBRARY_PATH) + len(probe.ENTRY_SYMBOL) + 2))
         changes = {i for i, (a, b) in enumerate(zip(original, patched)) if a != b}
         self.assertTrue(changes and changes <= allowed)
         self.assertEqual(len(original), len(patched))
@@ -54,14 +54,29 @@ class OriginalProbeTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             probe.patch_main(fixture())
         patched = self.patch_fixture(fixture())
-        with self.assertRaises(ValueError):
-            self.patch_fixture(patched)
+        with patch.object(probe, "SOURCE_SHA256", hashlib.sha256(fixture()).hexdigest()):
+            with self.assertRaises(ValueError):
+                probe.patch_main(patched)
 
-    def test_dirty_padding(self):
+    def test_header_padding_is_preserved(self):
         data = bytearray(fixture())
         data[probe.layout(data)["header_end"]] = 1
-        with self.assertRaises(ValueError):
-            self.patch_fixture(bytes(data))
+        patched = self.patch_fixture(bytes(data))
+        self.assertEqual(patched[:512], data[:512])
+
+    def test_livecontainer_load_command_insertion_preserves_bootstrap(self):
+        patched = bytearray(self.patch_fixture(fixture()))
+        startup = bytes(patched[512:676])
+        _, command_size = struct.unpack_from("<II", patched, 16)
+        # 模拟 LiveContainer 在首部插入 LC_ID_DYLIB，并在尾部插入加载命令。
+        inserted = struct.pack("<6I", 13, 32, 24, 2, 65536, 65536) + b"Campus\0\0"
+        patched[64:64 + command_size] = patched[32:32 + command_size]
+        patched[32:64] = inserted
+        end = 64 + command_size
+        patched[end:end + 48] = b"L" * 48
+        self.assertEqual(bytes(patched[512:676]), startup)
+        self.assertIn(probe.LIBRARY_PATH.encode() + b"\0", startup)
+        self.assertIn(probe.ENTRY_SYMBOL.encode() + b"\0", startup)
 
     def test_short_function_and_bad_symbol_table(self):
         data = bytearray(fixture())

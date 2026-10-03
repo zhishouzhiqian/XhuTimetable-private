@@ -33,7 +33,9 @@ Windows 可完成打包；iOS 诊断库需要 macOS/Xcode 编译。若只拿到�
 
 ## 启动改动与边界
 
-工具不改 LC_MAIN、不迁移 SDK。它仅改已确认边界内的原 main 函数和已确认空白头部区域：调用原程序已有的 dlopen/dlsym stub，加载本地诊断库，进入导出的 CampusOriginalProbeMain。
+工具不改 LC_MAIN、不迁移 SDK。它仅改已确认边界内的原 main 函数：调用原程序已有的 dlopen/dlsym stub，加载本地诊断库，进入导出的 CampusOriginalProbeMain。92 字节启动代码与 67 字节字符串共占 159 字节，完整放入原函数的 164 字节范围，不再占用头部空白区。
+
+旧诊断包将字符串放在加载命令末尾。LiveContainer 导入时会插入 LC_ID_DYLIB、TweakLoader 加载命令与 RPath，可能覆盖这些字符串；见 [LiveContainer 加载命令补丁实现](https://github.com/LiveContainer/LiveContainer/blob/main/LiveContainer/LCMachOUtils.m)。v2 包改为上述函数内存放，并用模拟插入命令的回归测试验证字符串与启动代码不变。此修复解决已确认的覆盖风险；没有真机崩溃日志时不能据此认定唯一闪退原因。
 
 两个加载失败分支均返回 78；不会回到原校园 main。诊断入口调用 UIKit UIApplicationMain，使用默认 UIApplication 和专用 AppDelegate。诊断入口不实例化原 TCApplication/TCAppDelegate，不调用其正常业务启动流程；更早的类加载行为仍不受控制。清除副本中的主 storyboard、主 nib 和 scene 配置，防止加载原 UI。
 
@@ -52,8 +54,8 @@ SDK 检查先执行内部 SecurityGuardManager 默认入口、静态存储包装
 
 ## 已完成与未验证
 
-本地 Python 回归验证补丁范围、源样本固定校验、空白头部、函数边界、加载符号、ARM64 失败跳转、输出保护、资源和 Bundle ID 保留。原样本指令离线反汇编确认，启动代码为 92 字节，原函数边界为 164 字节。
+本地 Python 回归验证补丁范围、源样本固定校验、头部保持不变、模拟容器插入加载命令、函数边界、加载符号、ARM64 失败跳转、输出保护、资源和 Bundle ID 保留。原样本指令离线反汇编确认，启动代码为 92 字节，原函数边界为 164 字节。
 
 macOS 原生桩测试覆盖默认索引/认证参数、空初始化字典、AppKey 空仍继续初始化、数值错误保留、报告脱敏以及缺资源/缺清单阻断。它们不会执行真实 SDK。
 
-本机没有 Xcode，未运行原生桩编译、iOS dylib 编译或真机诊断，未生成可安装 IPA，未解决 204/2404。用户运行新工作流后才可验证原生编译。
+用户已提供新工作流编译的诊断库，本机已生成未签名诊断 IPA。Windows 未运行 Xcode 原生测试，尚未获得成功的真机 SDK 诊断报告，未解决 204/2404。用户反馈旧包在 LiveContainer 闪退，v2 已修复头部字符串覆盖风险，仍需重新导入后验证。

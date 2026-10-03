@@ -168,21 +168,20 @@ def patch_main(data):
     if info["file_type"] != 2:
         raise ValueError("原文件必须是 MH_EXECUTE。")
     span = function_span(data, info)
-    first = min(section[2] for section in info["sections"])
     strings = LIBRARY_PATH.encode() + b"\0" + ENTRY_SYMBOL.encode() + b"\0"
-    end = info["header_end"] + len(strings)
-    if end > first or any(data[info["header_end"]:end]):
-        raise ValueError("头部没有足够的空白空间，拒绝覆盖。")
     stub = import_stubs(data, info)
     start = info["entry"]
-    code = trampoline(vm_address(info, start), vm_address(info, info["header_end"]),
-                      vm_address(info, info["header_end"] + len(LIBRARY_PATH) + 1),
+    # LiveContainer 会在头部空白区插入加载命令。将字符串紧随启动代码，
+    # 完整放入原 main 的已确认边界，避免被容器或重签工具覆盖。
+    string_start = start + 92
+    code = trampoline(vm_address(info, start), vm_address(info, string_start, len(strings)),
+                      vm_address(info, string_start + len(LIBRARY_PATH) + 1),
                       stub[b"_dlopen"], stub[b"_dlsym"])
-    if len(code) > span or start + span > len(data):
+    if len(code) != 92 or len(code) + len(strings) > span or start + span > len(data):
         raise ValueError("补丁超过已确认的启动函数边界。")
     patched = bytearray(data)
-    patched[info["header_end"]:end] = strings
     patched[start:start + len(code)] = code
+    patched[string_start:string_start + len(strings)] = strings
     return bytes(patched)
 
 
