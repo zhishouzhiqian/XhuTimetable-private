@@ -3,9 +3,16 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 output=build/ios-timetable-host
+build_type="${CAMPUS_HOST_BUILD_TYPE:-release}"
+case "$build_type" in
+  release) framework_task=linkReleaseFrameworkIosArm64; framework_dir=releaseFramework; swift_optimization=-O ;;
+  debug) framework_task=linkDebugFrameworkIosArm64; framework_dir=debugFramework; swift_optimization=-Onone ;;
+  *) echo 'CAMPUS_HOST_BUILD_TYPE 只能是 release 或 debug。' >&2; exit 1 ;;
+esac
 mkdir -p "$output/objects" "$output/resources"
 python3 -m unittest discover -s tools -p 'test_prepare_campus_timetable_host.py'
 python3 -m unittest discover -s tools -p 'test_slim_campus_timetable_host.py'
+python3 -m unittest discover -s tools -p 'test_compact_campus_timetable_host.py'
 bash tools/build_campus_original_probe.sh
 bash tools/test_campus_timetable_linker.sh
 xcrun --sdk macosx clang -fobjc-arc -fblocks \
@@ -37,8 +44,9 @@ export PLATFORM_NAME=iphoneos
 export ARCHS=arm64
 export ENABLE_USER_SCRIPT_SANDBOXING=NO
 ./gradlew --configure-on-demand composeApp:exportLibraryDefinitions \
-  composeApp:linkDebugFrameworkIosArm64 composeApp:syncComposeResourcesForIos --stacktrace
-framework=composeApp/build/bin/iosArm64/debugFramework
+  "composeApp:$framework_task" composeApp:syncComposeResourcesForIos \
+  -Pkotlin.native.binary.smallBinary=true --stacktrace
+framework="composeApp/build/bin/iosArm64/$framework_dir"
 sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
 sources=(tools/ios-original-probe/OriginalProbe.m tools/ios-original-probe/OriginalNetworkProbe.m \
   tools/ios-original-probe/OriginalDeviceProbe.m tools/ios-original-probe/OriginalLoginProbe.m \
@@ -49,12 +57,12 @@ sources=(tools/ios-original-probe/OriginalProbe.m tools/ios-original-probe/Origi
 objects=()
 for source in "${sources[@]}"; do
   object="$output/objects/$(basename "${source%.m}").o"
-  xcrun --sdk iphoneos clang -c -fobjc-arc -fblocks -fvisibility=hidden -DCAMPUS_TIMETABLE_HOST=1 \
+  xcrun --sdk iphoneos clang -c -Os -fobjc-arc -fblocks -fvisibility=hidden -DCAMPUS_TIMETABLE_HOST=1 \
     -target arm64-apple-ios16.0 -isysroot "$sdk" "$source" -o "$object"
   objects+=("$object")
 done
 # Swift 导入生成的 ComposeApp 头文件，编译期同时检查跨语言协议与参数名称。
-xcrun --sdk iphoneos swiftc -emit-library -module-name XhuCampusTimetableHost \
+xcrun --sdk iphoneos swiftc "$swift_optimization" -emit-library -module-name XhuCampusTimetableHost \
   -target arm64-apple-ios16.0 -sdk "$sdk" -F "$framework" -framework ComposeApp \
   -import-objc-header tools/ios-timetable-host/CampusTimetableClient.h \
   tools/ios-timetable-host/XhuCampusTimetableHost.swift \
@@ -68,6 +76,9 @@ xcrun --sdk iphoneos swiftc -emit-library -module-name XhuCampusTimetableHost \
   -framework ImageIO -framework CoreVideo -framework CoreMedia -framework Accelerate -framework OpenGLES \
   -Xlinker -map -Xlinker "$output/link-map.txt" \
   -lc++ -lsqlite3 -lz -o "$output/CampusOriginalProbe.dylib"
+# 只清理调试和本地符号；动态入口随后按同一导出白名单重新验收。
+xcrun strip -S -x "$output/CampusOriginalProbe.dylib"
+printf '%s\n' "$build_type" > "$output/build-type.txt"
 xcrun nm -gU "$output/CampusOriginalProbe.dylib" > "$output/exports.txt"
 grep -q ' _CampusOriginalProbeMain$' "$output/exports.txt"
 # 导出白名单也是保留根：SDK 包装函数不作为动态库公开入口，真实调用依赖仍须解析。
