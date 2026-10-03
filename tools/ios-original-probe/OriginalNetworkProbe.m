@@ -45,9 +45,12 @@ NSURLRequest *CampusOriginalConfigRequest(NSString *appKey, NSString *utdid, NSS
     }
     NSString *body = ProbeEncode(@"{}", encode);
     if (!body) return nil;
-    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:
-        @"https://acs.m.taobao.com/gw/%@/1.0/?data=%@", CampusOriginalConfigAPI, body]];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
+    NSURLComponents *components = [[NSURLComponents alloc] init];
+    components.scheme = @"https";
+    components.host = @"acs.m.taobao.com";
+    components.percentEncodedPath = [NSString stringWithFormat:@"/gw/%@/1.0/", CampusOriginalConfigAPI];
+    components.percentEncodedQuery = [@"data=" stringByAppendingString:body];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:components.URL
         cachePolicy:NSURLRequestReloadIgnoringLocalCacheData timeoutInterval:15];
     request.HTTPMethod = @"GET";
     request.HTTPShouldHandleCookies = NO;
@@ -132,18 +135,25 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
 }
 @end
 
-void CampusOriginalConfigSend(NSURLRequest *request, void (^completion)(NSDictionary *)) {
+BOOL CampusOriginalConfigRequestInScope(NSURLRequest *request) {
     // 固定目的地与方法；拒绝外部请求、Cookie 或正文。构造与发送均受此白名单约束。
     NSSet *expected = [NSSet setWithArray:@[@"x-appkey", @"x-utdid", @"x-ttid", @"x-t", @"x-pv",
         @"x-sign", @"x-mini-wua", @"x-umt", @"x-sgext"]];
     NSMutableSet *actual = [NSMutableSet set];
     for (NSString *key in request.allHTTPHeaderFields) [actual addObject:key.lowercaseString];
     NSString *path = [NSString stringWithFormat:@"/gw/%@/1.0/", CampusOriginalConfigAPI];
-    if (![request.URL.scheme isEqualToString:@"https"] || ![request.URL.host isEqualToString:@"acs.m.taobao.com"] ||
-        request.URL.port || request.URL.user || request.URL.password || request.URL.fragment ||
-        ![request.URL.path isEqualToString:path] || ![request.URL.query isEqualToString:@"data=%7B%7D"] ||
-        ![request.HTTPMethod isEqualToString:@"GET"] || request.HTTPBody || request.HTTPBodyStream ||
-        request.HTTPShouldHandleCookies || ![actual isEqualToSet:expected]) {
+    NSURLComponents *components = request.URL ? [NSURLComponents componentsWithURL:request.URL resolvingAgainstBaseURL:YES] : nil;
+    // NSURL.path 会去掉末尾斜杠并解码，不能用于检查实际发送的路径。
+    // 同时检查编码后的路径和查询，保持末尾斜杠并阻断多编码、额外参数。
+    return [components.scheme isEqualToString:@"https"] && [components.host isEqualToString:@"acs.m.taobao.com"] &&
+        !components.port && !components.user && !components.password && !components.fragment &&
+        [components.percentEncodedPath isEqualToString:path] && [components.percentEncodedQuery isEqualToString:@"data=%7B%7D"] &&
+        [request.HTTPMethod isEqualToString:@"GET"] && !request.HTTPBody && !request.HTTPBodyStream &&
+        !request.HTTPShouldHandleCookies && [actual isEqualToSet:expected];
+}
+
+void CampusOriginalConfigSend(NSURLRequest *request, void (^completion)(NSDictionary *)) {
+    if (!CampusOriginalConfigRequestInScope(request)) {
         completion(@{@"success": @NO, @"summary": @"发送前范围核对失败；未发送"}); return;
     }
     NSString *time = [request valueForHTTPHeaderField:@"x-t"];

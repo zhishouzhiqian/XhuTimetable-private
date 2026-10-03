@@ -14,9 +14,14 @@ void CampusOriginalNetworkProbeTests(void) {
     NSURLRequest *request = CampusOriginalConfigRequest(@"test-key", utdid, ttid, @"1800000000", factors, encode);
     NSCAssert(request != nil, @"合法配置请求未能构造");
     NSString *expectedPath = [NSString stringWithFormat:@"/gw/%@/1.0/", CampusOriginalConfigAPI];
-    NSCAssert([request.URL.host isEqualToString:@"acs.m.taobao.com"] &&
-        [request.URL.path isEqualToString:expectedPath] &&
-        [request.URL.query isEqualToString:@"data=%7B%7D"] && [request.HTTPMethod isEqualToString:@"GET"], @"匿名 API 或空正文错误");
+    NSURLComponents *components = [NSURLComponents componentsWithURL:request.URL resolvingAgainstBaseURL:YES];
+    NSCAssert([components.host isEqualToString:@"acs.m.taobao.com"], @"匿名请求主机错误");
+    NSCAssert([components.percentEncodedPath isEqualToString:expectedPath], @"匿名路径末尾斜杠或编码改变");
+    NSCAssert([components.percentEncodedQuery isEqualToString:@"data=%7B%7D"], @"匿名空正文线路编码错误");
+    NSCAssert([request.HTTPMethod isEqualToString:@"GET"], @"匿名请求方法错误");
+    NSCAssert(CampusOriginalConfigRequestInScope(request), @"合法请求被发送范围校验拒绝");
+    NSString *expectedURL = [NSString stringWithFormat:@"https://acs.m.taobao.com%@?data=%%7B%%7D", expectedPath];
+    NSCAssert([request.URL.absoluteString isEqualToString:expectedURL], @"实际 URL 丢失末尾斜杠或重复编码正文");
     NSCAssert(request.HTTPBody == nil && !request.HTTPShouldHandleCookies &&
         [request valueForHTTPHeaderField:@"Cookie"] == nil && [request valueForHTTPHeaderField:@"x-sid"] == nil &&
         [request valueForHTTPHeaderField:@"x-devid"] == nil, @"混入账号或旧注册状态");
@@ -50,6 +55,21 @@ void CampusOriginalNetworkProbeTests(void) {
             rejected = ![result[@"success"] boolValue] && [result[@"summary"] containsString:@"未发送"];
         });
         NSCAssert(rejected, @"越界或过期请求没有在发送前拒绝");
+    }
+    NSArray *wrongQueries = @[@"data=%257B%257D", @"data=%7B%7D&extra=1", @"data=%7B%7D&data=%7B%7D", @"data=%7B%22a%22%3A1%7D"];
+    for (NSString *query in wrongQueries) {
+        NSURLComponents *changed = [components copy];
+        changed.percentEncodedQuery = query;
+        NSMutableURLRequest *bad = [request mutableCopy];
+        bad.URL = changed.URL;
+        NSCAssert(!CampusOriginalConfigRequestInScope(bad), @"多编码、额外参数或正文改变未阻断");
+    }
+    for (NSString *path in @[[expectedPath substringToIndex:expectedPath.length - 1], [expectedPath stringByAppendingString:@"extra/"]]) {
+        NSURLComponents *changed = [components copy];
+        changed.percentEncodedPath = path;
+        NSMutableURLRequest *bad = [request mutableCopy];
+        bad.URL = changed.URL;
+        NSCAssert(!CampusOriginalConfigRequestInScope(bad), @"线路路径改变未阻断");
     }
     NSArray *cases = @[
         @{@"ret": @[@"SUCCESS::SECRET_BODY"], @"data": @{@"secret": @"SECRET_DATA"}},
