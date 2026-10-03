@@ -80,7 +80,45 @@ NSString *CampusOriginalAccountAPI(CampusOriginalPurpose purpose) {
     if (purpose == CampusOriginalPurposeLogin) return @"mtop.taobao.mloginservice.snslogin";
     if (purpose == CampusOriginalPurposeProfile) return @"mtop.tmall.campus.member.app.user.get";
     if (purpose == CampusOriginalPurposeOrders) return @"mtop.tmall.campus.share.applet.general.user.urgent.order.list";
+    if (purpose == CampusOriginalPurposeHistory) return @"mtop.tmall.campus.share.applet.general.user.order.list";
+    if (purpose == CampusOriginalPurposeBuildings) return @"mtop.tmall.campus.share.applet.building.list";
+    if (purpose == CampusOriginalPurposeDevices) return @"mtop.tmall.campus.share.applet.device.list";
+    if (purpose == CampusOriginalPurposeDeviceInfo) return @"mtop.tmall.campus.share.applet.general.device.info";
     return nil;
+}
+
+// 与 Android JSONObject.optBoolean 对齐，但未知值和缺失值不能充当成功。
+static BOOL AccountBoolean(id value, BOOL expected) {
+    if ([value isKindOfClass:NSNumber.class]) return [value isEqual:@(expected)];
+    if ([value isKindOfClass:NSString.class]) return [value caseInsensitiveCompare:expected ? @"true" : @"false"] == NSOrderedSame;
+    return NO;
+}
+
+static BOOL AccountDeviceCode(id value) {
+    NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-"];
+    return AccountText(value, 128) && [value rangeOfCharacterFromSet:allowed.invertedSet].location == NSNotFound;
+}
+
+NSString *CampusOriginalReadBody(CampusOriginalPurpose purpose, NSDictionary *device) {
+    NSString *type = nil; NSDictionary *query = nil;
+    if (purpose == CampusOriginalPurposeOrders) {
+        type = @"USER_URGENT_ORDER_LIST"; query = @{@"isv": @"CAMPUS", @"businessType": @"WASH_AND_CARE"};
+    } else if (purpose == CampusOriginalPurposeHistory) {
+        type = @"USER_ORDER_LIST"; query = @{@"isv": @"CAMPUS", @"businessType": @"WASH_AND_CARE", @"pageNum": @1, @"pageSize": @10, @"isQueryToPayOrderList": @NO};
+    } else if (purpose == CampusOriginalPurposeBuildings) {
+        type = @"USER_BUILDING_LIST"; query = @{@"relationStatus": @"ON", @"businessType": @"WASH_AND_CARE"};
+    } else if (purpose == CampusOriginalPurposeDevices) {
+        type = @"USER_DEVICE_LIST"; query = @{@"pageNum": @1, @"pageSize": @20, @"deviceType": @"COMMONLY_USED_DEVICE", @"choose": @YES};
+    } else if (purpose == CampusOriginalPurposeDeviceInfo) {
+        if (!AccountDeviceCode(device[@"resNo"]) || !AccountText(device[@"deviceId"], 128)) return nil;
+        type = @"DEVICE_INFO_GET"; query = @{@"isv": @"CAMPUS", @"businessType": @"WASH_AND_CARE", @"resNo": device[@"resNo"],
+            @"deviceId": device[@"deviceId"], @"needAutoSendCoupon": @NO, @"paymentChannel": @"TMXY_APP"};
+    }
+    if (!query) return nil;
+    NSData *inner = [NSJSONSerialization dataWithJSONObject:query options:0 error:nil];
+    NSDictionary *outer = @{@"requestType": type, @"requestJson": [[NSString alloc] initWithData:inner encoding:NSUTF8StringEncoding]};
+    NSData *body = [NSJSONSerialization dataWithJSONObject:outer options:0 error:nil];
+    return body ? [[NSString alloc] initWithData:body encoding:NSUTF8StringEncoding] : nil;
 }
 
 static NSDictionary *AccountJSON(NSString *body) {
@@ -92,9 +130,13 @@ static NSDictionary *AccountJSON(NSString *body) {
 static BOOL AccountBodyValid(NSString *body, CampusOriginalPurpose purpose, NSDictionary *identity) {
     NSDictionary *object = AccountJSON(body);
     if (purpose == CampusOriginalPurposeProfile) return [object isEqual:@{@"platForm": @"ios"}];
-    if (purpose == CampusOriginalPurposeOrders) {
-        return object.count == 2 && [object[@"requestType"] isEqual:@"USER_URGENT_ORDER_LIST"] &&
-            [AccountJSON(object[@"requestJson"]) isEqual:@{@"isv": @"CAMPUS", @"businessType": @"WASH_AND_CARE"}];
+    if (purpose >= CampusOriginalPurposeOrders && purpose <= CampusOriginalPurposeDeviceInfo) {
+        NSDictionary *query = AccountJSON(object[@"requestJson"]);
+        NSDictionary *device = purpose == CampusOriginalPurposeDeviceInfo && query ?
+            @{@"resNo": query[@"resNo"] ?: NSNull.null, @"deviceId": query[@"deviceId"] ?: NSNull.null} : nil;
+        NSDictionary *expected = AccountJSON(CampusOriginalReadBody(purpose, device));
+        return expected && object.count == 2 && [object[@"requestType"] isEqual:expected[@"requestType"]] &&
+            [query isEqual:AccountJSON(expected[@"requestJson"])];
     }
     if (purpose != CampusOriginalPurposeLogin || object.count != 3 || ![object[@"ext"] isEqual:@"{}"]) return NO;
     NSDictionary *info = AccountJSON(object[@"snsLoginInfo"]), *risk = AccountJSON(object[@"riskControlInfo"]);
@@ -182,13 +224,92 @@ NSDictionary *CampusOriginalAccountEvidence(NSData *body, CampusOriginalPurpose 
     if (purpose == CampusOriginalPurposeProfile) {
         return AccountText(data[@"openUserId"], 256) || AccountText(data[@"phone"], 128) ? @{@"verified": @YES} : nil;
     }
-    if (purpose == CampusOriginalPurposeOrders) {
-        id fail = data[@"fail"];
-        id inner = data[@"data"];
-        id rows = [inner isKindOfClass:NSDictionary.class] ? inner[@"urgentOrderListResponse"] : nil;
-        if (![fail isKindOfClass:NSNumber.class] || [fail boolValue] || ![rows isKindOfClass:NSArray.class] || [rows count] > 200) return nil;
+    id inner = data[@"data"], rows = nil;
+    NSUInteger maximum = 0;
+    if (purpose == CampusOriginalPurposeOrders || purpose == CampusOriginalPurposeHistory) {
+        if (!AccountBoolean(data[@"fail"], NO) || ![inner isKindOfClass:NSDictionary.class]) return nil;
+        rows = inner[purpose == CampusOriginalPurposeOrders ? @"urgentOrderListResponse" : @"orderListResponses"];
+        maximum = purpose == CampusOriginalPurposeOrders ? 20 : 10;
+    } else if (purpose == CampusOriginalPurposeBuildings) {
+        if (!AccountBoolean(data[@"fail"], NO)) return nil;
+        rows = inner; maximum = 200;
+    } else if (purpose == CampusOriginalPurposeDevices) {
+        id page = data[@"pageResult"];
+        if (![page isKindOfClass:NSDictionary.class] || !AccountBoolean(page[@"success"], YES)) return nil;
+        rows = page[@"data"]; maximum = 20;
+    } else if (purpose == CampusOriginalPurposeDeviceInfo) {
+        if (!AccountBoolean(data[@"fail"], NO) || ![inner isKindOfClass:NSDictionary.class]) return nil;
+        id device = inner[@"deviceResponse"];
+        if (![device isKindOfClass:NSDictionary.class] || !AccountDeviceCode(device[@"deviceCode"]) || !AccountUID(device[@"deviceId"])) return nil;
+        id modes = device[@"deviceWorkingModelDTOS"];
+        if (![modes isKindOfClass:NSArray.class] || [modes count] > 100) return nil;
+        NSUInteger count = 0;
+        for (id mode in modes) {
+            if (![mode isKindOfClass:NSDictionary.class]) return nil;
+            if (!AccountBoolean(mode[@"isSupport"], YES)) continue;
+            id prices = mode[@"priceModelList"];
+            if (![prices isKindOfClass:NSArray.class] || [prices count] > 100) return nil;
+            for (id price in prices) {
+                if (![price isKindOfClass:NSDictionary.class]) return nil;
+                if (AccountBoolean(price[@"isOpen"], YES) && AccountText(price[@"key"], 128)) count++;
+            }
+        }
+        id usable = device[@"deviceCanUse"];
+        if (!AccountBoolean(usable, YES) && !AccountBoolean(usable, NO)) return nil;
+        return @{@"verified": @YES, @"programs": @(count), @"canUse": @(AccountBoolean(usable, YES)),
+            @"resNo": device[@"deviceCode"], @"deviceId": AccountUID(device[@"deviceId"])};
+    }
+    if (maximum) {
+        if (![rows isKindOfClass:NSArray.class] || [rows count] > maximum) return nil;
         for (id row in rows) if (![row isKindOfClass:NSDictionary.class]) return nil;
-        return @{@"verified": @YES, @"count": @([rows count])};
+        NSMutableDictionary *evidence = [@{@"verified": @YES, @"count": @([rows count])} mutableCopy];
+        if (purpose == CampusOriginalPurposeDevices) for (NSDictionary *row in rows) {
+            NSString *deviceID = AccountUID(row[@"deviceId"]);
+            if (AccountDeviceCode(row[@"deviceCode"]) && deviceID) {
+                evidence[@"device"] = @{@"resNo": row[@"deviceCode"], @"deviceId": deviceID}; break;
+            }
+        }
+        return evidence;
     }
     return nil;
+}
+
+// 仅描述固定字段的类型与真假；不打印任意键名、业务正文或身份标识。
+static NSString *AccountShapeType(id value) {
+    if (!value) return @"缺失";
+    if (value == NSNull.null) return @"null";
+    if ([value isKindOfClass:NSString.class]) {
+        if (AccountBoolean(value, YES)) return @"字符串 true";
+        if (AccountBoolean(value, NO)) return @"字符串 false";
+        return @"其它字符串（隐藏）";
+    }
+    if ([value isKindOfClass:NSNumber.class]) {
+        if (AccountBoolean(value, YES)) return @"数值/布尔 true";
+        if (AccountBoolean(value, NO)) return @"数值/布尔 false";
+        return @"其它数值（隐藏）";
+    }
+    if ([value isKindOfClass:NSDictionary.class]) return @"对象";
+    if ([value isKindOfClass:NSArray.class]) return @"数组";
+    return @"其它类型";
+}
+
+NSString *CampusOriginalAccountShape(NSData *body, CampusOriginalPurpose purpose) {
+    if (!body.length || body.length > 1024 * 1024) return @"正文为空或超限";
+    id root = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
+    id data = [root isKindOfClass:NSDictionary.class] ? root[@"data"] : nil;
+    if (![data isKindOfClass:NSDictionary.class]) return [@"data=" stringByAppendingString:AccountShapeType(data)];
+    id inner = data[@"data"], leaf = nil;
+    NSString *key = @"data.data";
+    if (purpose == CampusOriginalPurposeDevices) {
+        inner = data[@"pageResult"]; key = @"pageResult.data";
+        leaf = [inner isKindOfClass:NSDictionary.class] ? inner[@"data"] : nil;
+    } else if (purpose == CampusOriginalPurposeBuildings) leaf = inner;
+    else {
+        key = purpose == CampusOriginalPurposeOrders ? @"urgentOrderListResponse" :
+            purpose == CampusOriginalPurposeHistory ? @"orderListResponses" : @"deviceResponse";
+        leaf = [inner isKindOfClass:NSDictionary.class] ? inner[key] : nil;
+    }
+    NSString *flag = purpose == CampusOriginalPurposeDevices ? @"pageResult.success" : @"fail";
+    id value = purpose == CampusOriginalPurposeDevices && [inner isKindOfClass:NSDictionary.class] ? inner[@"success"] : data[@"fail"];
+    return [NSString stringWithFormat:@"%@=%@；内层=%@；%@=%@", flag, AccountShapeType(value), AccountShapeType(inner), key, AccountShapeType(leaf)];
 }

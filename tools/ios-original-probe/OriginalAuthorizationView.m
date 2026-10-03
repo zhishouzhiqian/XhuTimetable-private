@@ -24,7 +24,7 @@
     [close addTarget:self action:@selector(cancel) forControlEvents:UIControlEventTouchUpInside];
     self.status = [[UILabel alloc] init]; self.status.numberOfLines = 0;
     self.status.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
-    self.status.text = @"请在官方页面手动完成本人验证码登录。诊断不读取输入值；取得一次性授权结果后，只交换校园会话并查询本人资料和洗衣运行订单。";
+    self.status.text = @"请在官方页面手动完成本人验证码登录。诊断不读取输入值；取得一次性授权结果后，只交换校园会话并查询本人资料、运行/历史订单、关联楼栋及设备状态和程序。";
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[close, self.status, self.web]];
     stack.axis = UILayoutConstraintAxisVertical; stack.spacing = 8; stack.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:stack];
@@ -53,7 +53,7 @@
     NSURLComponents *c = url ? [NSURLComponents componentsWithURL:url resolvingAgainstBaseURL:YES] : nil;
     BOOL callback = [c.host.lowercaseString isEqual:@"www.alipay.com"] && [c.percentEncodedPath isEqual:@"/webviewbridge"];
     if (code) { decisionHandler(WKNavigationActionPolicyCancel); [self finish:code error:nil]; return; }
-    if (callback) { decisionHandler(WKNavigationActionPolicyCancel); self.status.text = @"授权回调缺失、重复或不是主页面；未交换会话。可取消后重新开始。"; return; }
+    if (callback) { decisionHandler(WKNavigationActionPolicyCancel); self.status.text = @"授权回调缺失、重复或不是主页面；未交换会话。请彻底关闭应用后重新开始。"; return; }
     BOOL allowed = CampusOriginalAuthorizationNavigation(url);
     decisionHandler(allowed ? WKNavigationActionPolicyAllow : WKNavigationActionPolicyCancel);
     if (!allowed && action.targetFrame.isMainFrame) self.status.text = @"外部跳转已阻止，请在官方网页使用本人手机号验证码登录。";
@@ -66,7 +66,7 @@
 - (void)webView:(WKWebView *)web didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     if (error.code != NSURLErrorCancelled) self.status.text = @"授权页面加载失败。请取消后检查网络；报告不展示网页地址或错误正文。";
 }
-- (void)webViewWebContentProcessDidTerminate:(WKWebView *)web { self.status.text = @"网页进程已结束，请取消后重新打开本人登录。"; }
+- (void)webViewWebContentProcessDidTerminate:(WKWebView *)web { self.status.text = @"网页进程已结束，请彻底关闭应用后重新开始。"; }
 - (void)webView:(WKWebView *)web didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     if (error.code != NSURLErrorCancelled) self.status.text = @"授权页面加载失败，请取消后检查网络。错误正文不展示。";
 }

@@ -203,7 +203,7 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
         if (!evidence) {
             NSString *reason = self.purpose == CampusOriginalPurposeLogin ? @"returnValue.sid/hid 有效值未通过" :
                 self.purpose == CampusOriginalPurposeProfile ? @"资料 openUserId/phone 身份字段未通过" :
-                @"订单 fail=false 或 urgentOrderListResponse 数组未通过";
+                [@"只读业务结构未通过：" stringByAppendingString:CampusOriginalAccountShape(self.body, self.purpose)];
             result = @{@"success": @NO, @"summary": [NSString stringWithFormat:@"HTTP/业务码通过，但 %@（数据隐藏）", reason]};
         }
     }

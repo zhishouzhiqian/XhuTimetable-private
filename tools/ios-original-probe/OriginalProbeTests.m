@@ -58,9 +58,10 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
 - (NSDictionary *)getSecurityFactors:(NSDictionary *)parameters error:(NSError **)error {
     BOOL config = [parameters[@"api"] isEqualToString:CampusOriginalConfigAPI];
     BOOL registration = [parameters[@"api"] isEqualToString:CampusOriginalRegisterAPI];
-    BOOL account = [parameters[@"api"] isEqual:CampusOriginalAccountAPI(CampusOriginalPurposeLogin)] ||
-        [parameters[@"api"] isEqual:CampusOriginalAccountAPI(CampusOriginalPurposeProfile)] ||
-        [parameters[@"api"] isEqual:CampusOriginalAccountAPI(CampusOriginalPurposeOrders)];
+    BOOL account = NO;
+    for (CampusOriginalPurpose purpose = CampusOriginalPurposeLogin; purpose <= CampusOriginalPurposeDeviceInfo; purpose++) {
+        if ([parameters[@"api"] isEqual:CampusOriginalAccountAPI(purpose)]) account = YES;
+    }
     NSCAssert([parameters[@"appkey"] isEqualToString:@"TEST_APPKEY_MUST_NOT_APPEAR"] &&
         (config || registration || account || [parameters[@"api"] isEqualToString:@"mtop.sys.newdeviceid"]) &&
         [parameters[@"useWua"] isEqual:@NO] && [parameters[@"env"] isEqual:@0] &&

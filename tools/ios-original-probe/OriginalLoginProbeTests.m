@@ -95,7 +95,13 @@ void CampusOriginalLoginProbeTests(void) {
         [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"]]; };
     NSDictionary *factors = @{@"x-sign": @"SECRET_SIGN", @"x-mini-wua": @"SECRET_MINI", @"x-umt": @"SECRET_UMT", @"x-sgext": @"SECRET_SGEXT"};
     NSDictionary *session = @{@"sid": @"SECRET_SID+/=", @"uid": @"123456"};
-    NSArray *bodies = @[body, @"{\"platForm\":\"ios\"}", @"{\"requestType\":\"USER_URGENT_ORDER_LIST\",\"requestJson\":\"{\\\"isv\\\":\\\"CAMPUS\\\",\\\"businessType\\\":\\\"WASH_AND_CARE\\\"}\"}"];
+    NSDictionary *listedDevice = @{@"resNo": @"TEST_DEVICE", @"deviceId": @"12345"};
+    NSArray *bodies = @[body, @"{\"platForm\":\"ios\"}",
+        CampusOriginalReadBody(CampusOriginalPurposeOrders, nil),
+        CampusOriginalReadBody(CampusOriginalPurposeHistory, nil),
+        CampusOriginalReadBody(CampusOriginalPurposeBuildings, nil),
+        CampusOriginalReadBody(CampusOriginalPurposeDevices, nil),
+        CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, listedDevice)];
     for (NSUInteger i = 0; i < bodies.count; i++) {
         CampusOriginalPurpose purpose = (CampusOriginalPurpose)(CampusOriginalPurposeLogin + i);
         NSString *reason = nil;
@@ -146,4 +152,45 @@ void CampusOriginalLoginProbeTests(void) {
     NSCAssert(CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @YES, @"data": @{@"urgentOrderListResponse": @[]}}}), CampusOriginalPurposeOrders) == nil &&
         CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"data": @{@"urgentOrderListResponse": @[]}}}), CampusOriginalPurposeOrders) == nil,
         @"业务失败或缺少业务状态被误判为空订单");
+    NSDictionary *stringFalse = CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @"false", @"data": @{@"urgentOrderListResponse": @[]}}}), CampusOriginalPurposeOrders);
+    NSCAssert([stringFalse[@"verified"] boolValue] && [stringFalse[@"count"] isEqual:@0], @"安卓可解析的字符串 false 被拒绝");
+    for (id invalid in @[@"true", @"unknown", NSNull.null, @2]) {
+        NSCAssert(CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": invalid, @"data": @{@"urgentOrderListResponse": @[]}}}), CampusOriginalPurposeOrders) == nil, @"失败、未知或 null 状态误判成功");
+    }
+    NSString *shape = CampusOriginalAccountShape(LoginTestData(@{@"data": @{@"fail": @"false", @"data": @{@"secret": @"SECRET_RESPONSE_BODY"}}}), CampusOriginalPurposeOrders);
+    NSCAssert([shape containsString:@"字符串 false"] && [shape containsString:@"urgentOrderListResponse=缺失"] && ![shape containsString:@"SECRET"], @"结构诊断未区分缺字段或泄露业务正文");
+    NSCAssert(CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @"false", @"data": @{}}}), CampusOriginalPurposeOrders) == nil, @"缺失订单列表被误判为空数组");
+    NSCAssert([CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @"FALSE", @"data": @{@"orderListResponses": @[]}}}), CampusOriginalPurposeHistory)[@"count"] isEqual:@0], @"历史空数组或布尔字符串不兼容");
+    NSCAssert([CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @NO, @"data": @[]}}), CampusOriginalPurposeBuildings)[@"count"] isEqual:@0], @"楼栋空数组不兼容");
+    NSDictionary *page = @{@"data": @{@"pageResult": @{@"success": @"true", @"data": @[@{@"deviceCode": @"TEST_DEVICE", @"deviceId": @12345, @"deviceName": @"SECRET_NAME"}]}}};
+    NSDictionary *deviceEvidence = CampusOriginalAccountEvidence(LoginTestData(page), CampusOriginalPurposeDevices);
+    NSCAssert([deviceEvidence[@"count"] isEqual:@1] && [deviceEvidence[@"device"] isEqual:listedDevice] && ![deviceEvidence.description containsString:@"SECRET"], @"列表设备筛选或脱敏未通过");
+    NSCAssert(CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"pageResult": @{@"success": @NO, @"data": @[]}}}), CampusOriginalPurposeDevices) == nil, @"失败的分页被接受");
+    NSDictionary *detail = @{@"data": @{@"fail": @"false", @"data": @{@"deviceResponse": @{@"deviceCode": @"TEST_DEVICE", @"deviceId": @"12345", @"deviceCanUse": @"true",
+        @"deviceWorkingModelDTOS": @[@{@"isSupport": @YES, @"priceModelList": @[@{@"key": @"TEST_PROGRAM", @"isOpen": @"true", @"price": @"SECRET_PRICE"}, @{@"key": @"CLOSED", @"isOpen": @NO}]}]}}}};
+    NSDictionary *detailEvidence = CampusOriginalAccountEvidence(LoginTestData(detail), CampusOriginalPurposeDeviceInfo);
+    NSCAssert([detailEvidence[@"programs"] isEqual:@1] && [detailEvidence[@"canUse"] boolValue] && ![detailEvidence.description containsString:@"SECRET"], @"开放洗衣程序统计或脱敏未通过");
+    NSCAssert(CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, nil) == nil, @"没有列表设备仍构造详情");
+    NSDictionary *history = [NSJSONSerialization JSONObjectWithData:[bodies[3] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *query = [NSJSONSerialization JSONObjectWithData:[history[@"requestJson"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSCAssert([query[@"pageNum"] isEqual:@1] && [query[@"pageSize"] isEqual:@10] && [query[@"isQueryToPayOrderList"] isEqual:@NO], @"只读历史范围扩大到额外分页或待支付查询");
+    NSMutableDictionary *wrongDetail = [listedDevice mutableCopy]; wrongDetail[@"resNo"] = @"invalid&identifier";
+    NSCAssert(CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, wrongDetail) == nil, @"无效列表设备未阻断");
+
+    for (CampusOriginalPurpose purpose = CampusOriginalPurposeHistory; purpose <= CampusOriginalPurposeDeviceInfo; purpose++) {
+        NSString *valid = CampusOriginalReadBody(purpose, listedDevice);
+        NSMutableDictionary *envelope = [[NSJSONSerialization JSONObjectWithData:[valid dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] mutableCopy];
+        NSMutableDictionary *payload = [[NSJSONSerialization JSONObjectWithData:[envelope[@"requestJson"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] mutableCopy];
+        if (purpose == CampusOriginalPurposeHistory || purpose == CampusOriginalPurposeDevices) payload[@"pageNum"] = @2;
+        else if (purpose == CampusOriginalPurposeDeviceInfo) payload[@"needAutoSendCoupon"] = @YES;
+        else payload[@"businessType"] = @"OTHER_BUSINESS";
+        envelope[@"requestJson"] = [[NSString alloc] initWithData:LoginTestData(payload) encoding:NSUTF8StringEncoding];
+        NSString *badBody = [[NSString alloc] initWithData:LoginTestData(envelope) encoding:NSUTF8StringEncoding];
+        NSCAssert(CampusOriginalAccountRequest(identity, @"1800000000", badBody, factors, session, purpose, encode, nil) == nil,
+            @"额外分页、其它业务或自动领券突破只读范围");
+        envelope[@"requestType"] = @"CREATE_ORDER";
+        badBody = [[NSString alloc] initWithData:LoginTestData(envelope) encoding:NSUTF8StringEncoding];
+        NSCAssert(CampusOriginalAccountRequest(identity, @"1800000000", badBody, factors, session, purpose, encode, nil) == nil, @"创建请求混入只读范围");
+    }
+
 }

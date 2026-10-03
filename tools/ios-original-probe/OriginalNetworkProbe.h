@@ -15,7 +15,9 @@ void CampusOriginalConfigSend(NSURLRequest *request, void (^completion)(NSDictio
 
 typedef NS_ENUM(NSInteger, CampusOriginalPurpose) {
     CampusOriginalPurposeConfig, CampusOriginalPurposeRegister, CampusOriginalPurposeReuse,
-    CampusOriginalPurposeLogin, CampusOriginalPurposeProfile, CampusOriginalPurposeOrders
+    CampusOriginalPurposeLogin, CampusOriginalPurposeProfile, CampusOriginalPurposeOrders,
+    CampusOriginalPurposeHistory, CampusOriginalPurposeBuildings, CampusOriginalPurposeDevices,
+    CampusOriginalPurposeDeviceInfo
 };
 FOUNDATION_EXPORT NSString *const CampusOriginalRegisterAPI;
 NSString *CampusOriginalRegistrationBody(NSString *utdid, NSString *platform, NSString *mac);
@@ -32,6 +34,8 @@ BOOL CampusOriginalAuthorizationNavigation(NSURL *url);
 NSURL *CampusOriginalAuthorizationURL(NSString *appKey);
 NSString *CampusOriginalLoginBody(NSDictionary *info, NSDictionary *risk, NSDictionary *identity, NSString *code);
 NSString *CampusOriginalAccountAPI(CampusOriginalPurpose purpose);
+NSString *CampusOriginalReadBody(CampusOriginalPurpose purpose, NSDictionary *device);
+NSString *CampusOriginalAccountShape(NSData *body, CampusOriginalPurpose purpose);
 NSURLRequest *CampusOriginalAccountRequest(NSDictionary *identity, NSString *time, NSString *body,
     NSDictionary *factors, NSDictionary *session, CampusOriginalPurpose purpose,
     NSString *(^encode)(NSString *), NSString *__autoreleasing *reason);
