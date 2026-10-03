@@ -121,6 +121,25 @@ class LaundrySharedViewModelTest {
         assertTrue(gateway.samples.isNotEmpty())
     }
 
+    @Test fun initializationFailureKeepsStageReportAndRetryCanContinue() {
+        val gateway = FakeGateway().apply {
+            initializationError = LaundryInitializationException("匿名配置响应：网络失败（错误码 -1009）")
+        }
+        val model = model(gateway)
+        assertTrue(model.state.value.error!!.contains("匿名配置响应"))
+        assertEquals(LaundryPage.Loading, model.state.value.page)
+        assertNull(model.command.value)
+        gateway.initializationError = null
+        model.refresh()
+        assertEquals(LaundryPage.Home, model.state.value.page)
+        assertNull(model.state.value.error)
+    }
+
+    @Test fun ordinaryExceptionBodyIsNotShown() {
+        val model = model(FakeGateway().apply { initializationError = IllegalStateException("private-token") })
+        assertFalse(model.state.value.error!!.contains("private-token"))
+    }
+
     private class FakeGateway : LaundryGateway {
         override var supportsPayment = true
         var session = true
@@ -133,7 +152,8 @@ class LaundrySharedViewModelTest {
         var acknowledgments = 0
         val quoted = mutableListOf<String>()
         val samples = mutableListOf<Boolean>()
-        override suspend fun initialize() {}
+        var initializationError: Exception? = null
+        override suspend fun initialize() { initializationError?.let { throw it } }
         override suspend fun hasSession() = session
         override suspend fun verify() = checkSession()
         private fun checkSession() { if (!session) error("SESSION_EXPIRED") }

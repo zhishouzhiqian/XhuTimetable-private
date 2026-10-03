@@ -11,6 +11,10 @@ xcrun --sdk macosx clang -fobjc-arc -fblocks \
   tools/ios-timetable-host/CampusTimetableModels.m tools/ios-timetable-host/CampusTimetableModelTests.m \
   -framework Foundation -framework CoreFoundation -o "$output/model-tests"
 "$output/model-tests"
+xcrun --sdk macosx clang -fobjc-arc -fblocks \
+  tools/ios-timetable-host/CampusTimetableClient.m tools/ios-timetable-host/CampusTimetableClientTests.m \
+  -framework Foundation -o "$output/client-tests"
+"$output/client-tests"
 # Compose 的正式同步任务负责收集所有依赖资源，避免只复制本模块的图片。
 export BUILT_PRODUCTS_DIR="$PWD/$output"
 export UNLOCALIZED_RESOURCES_FOLDER_PATH=resources

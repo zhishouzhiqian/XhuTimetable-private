@@ -375,6 +375,10 @@ open class LaundryViewModel(
 
     private fun handle(error: Exception) {
         if (error is CancellationException) throw error
+        if (error is LaundryInitializationException) {
+            _state.update { it.copy(error = "校园洗衣初始化未通过，请保留以下检查结果：\n${error.report}") }
+            return
+        }
         if (error.message == "SESSION_EXPIRED") {
             authenticated = false
             guard.nextQuote()

@@ -31,3 +31,5 @@ python tools/prepare_campus_timetable_host.py --ipa <原天猫校园_5.7.2.ipa> 
 `test_campus_timetable_linker.sh` 在 macOS 检查三种情况：默认导出重现缺失包装器、限定导出后能实际调用启动工厂、缺失符号成为真实依赖时仍拒绝链接。整合库最终导出也逐项核对，链接图与导入清单供进一步定位。
 
 合成包的 `Info.plist` 必须保留课表宿主要求的布尔项 `CADisableMinimumFrameDurationOnPhone = true`。原校园主应用没有此项，不能仅保留原包配置；缺失会触发 Compose 的严格启动检查。打包测试同时检查原载体为 false 时的修正结果和正常课表宿主配置。[Compose 官方启动要求](https://kotlinlang.org/docs/multiplatform/compose-swiftui-integration.html)
+
+初始化失败时，共享页面显示原检查流程的固定脱敏阶段（资源、SDK、请求一致性、匿名配置、设备注册和返回 ID 复用）。普通异常正文仍不展示。原生桩测试检查失败阶段、同实例重试、就绪缓存及未登录状态；不会加载厂商 SDK 或发送请求。

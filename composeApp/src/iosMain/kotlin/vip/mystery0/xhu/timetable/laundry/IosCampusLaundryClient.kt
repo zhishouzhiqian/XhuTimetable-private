@@ -36,7 +36,11 @@ object IosCampusClientBridge {
         val continuation = pending.remove(requestId) ?: return
         if (!continuation.isActive) return
         when {
-            error != null -> continuation.resumeWithException(IllegalStateException(error))
+            error != null -> continuation.resumeWithException(
+                if (error.startsWith("CAMPUS_INIT_FAILED\n") && error.length <= 16384)
+                    LaundryInitializationException(error.substringAfter('\n').trim())
+                else IllegalStateException(error)
+            )
             result != null && result.length <= 262144 -> continuation.resume(result)
             else -> continuation.resumeWithException(IllegalStateException("洗衣响应未通过校验。"))
         }

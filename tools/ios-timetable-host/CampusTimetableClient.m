@@ -5,6 +5,26 @@ __attribute__((visibility("default"))) const char *CampusTimetableHostVersion = 
 void CampusOriginalProbeNetworkRun(NSDictionary *, NSString *, void (^)(NSArray *), void (^)(NSDictionary *), void (^)(NSArray *));
 NSURLRequest *CampusTimetableAccountRequest(NSDictionary *, NSDictionary *, CampusOriginalPurpose, NSDictionary *, NSString *);
 
+// 只投影原检查流程已经脱敏的固定阶段；不传递 SDK 对象、请求参数或异常正文。
+static NSString *CampusInitializationReport(NSArray *rows) {
+    NSSet *steps = [NSSet setWithArray:@[@"yw_1222.jpg", @"yw_1222_mwua.jpg", @"内部管理器",
+        @"本地检查", @"SDK 版本", @"静态存储组件", @"AppKey 索引 0", @"Open 管理器", @"统一签名接口", @"统一签名初始化",
+        @"设备上下文", @"UTDID 形状", @"UTDID 重复读取", @"UTDID 原入口对照", @"应用协议参数", @"校园请求 AppKey", @"设备与编码入口", @"本次配置查询签名",
+        @"本次请求一致性", @"联网检查", @"联网准备", @"阶段上下文", @"匿名配置响应",
+        @"注册 API 原入口", @"注册准备", @"设备注册签名", @"设备注册请求一致性", @"设备注册响应",
+        @"复用准备", @"设备 ID 复用签名", @"设备 ID 复用请求一致性", @"带设备 ID 配置响应"]];
+    NSMutableString *report = [NSMutableString stringWithString:@"CAMPUS_INIT_FAILED\n"];
+    NSUInteger count = 0;
+    for (id row in rows) {
+        if (![row isKindOfClass:NSDictionary.class] || ![steps containsObject:row[@"step"]] ||
+            ![row[@"result"] isKindOfClass:NSString.class] || [row[@"result"] length] > 512) continue;
+        if (++count > 32 || report.length + [row[@"step"] length] + [row[@"result"] length] > 8192) break;
+        [report appendFormat:@"%@：%@\n", row[@"step"], row[@"result"]];
+    }
+    if (count == 0) [report appendString:@"初始化检查没有返回可用阶段记录。"];
+    return [report copy];
+}
+
 @interface CampusTimetableClient ()
 @property(nonatomic, strong) dispatch_queue_t queue;
 @property(nonatomic, copy) NSDictionary *context;
@@ -67,8 +87,9 @@ NSURLRequest *CampusTimetableAccountRequest(NSDictionary *, NSDictionary *, Camp
                 if (self.context) { finish(@{}, nil); return; }
                 __block NSDictionary *prepared = nil;
                 CampusOriginalProbeNetworkRun(NSBundle.mainBundle.infoDictionary[@"CampusOriginalProbe"], NSBundle.mainBundle.bundlePath,
-                    nil, ^(NSDictionary *ready) { prepared = ready; }, ^(NSArray *unused) {
-                        dispatch_async(self.queue, ^{ self.context = prepared; finish(prepared ? @{} : nil, prepared ? nil : @"校园组件初始化或设备注册未通过。"); });
+                    nil, ^(NSDictionary *ready) { prepared = ready; }, ^(NSArray *rows) {
+                        NSString *failure = prepared ? nil : CampusInitializationReport(rows);
+                        dispatch_async(self.queue, ^{ self.context = prepared; finish(prepared ? @{} : nil, failure); });
                     });
                 return;
             }
@@ -123,7 +144,10 @@ NSURLRequest *CampusTimetableAccountRequest(NSDictionary *, NSDictionary *, Camp
                     }]; return;
             }
             finish(nil, @"当前整合测试不支持此操作。");
-        } @catch (NSException *exception) { finish(nil, @"洗衣客户端处理失败，请重试。"); }
+        } @catch (NSException *exception) {
+            finish(nil, [action isEqual:@"initialize"] ?
+                @"CAMPUS_INIT_FAILED\n初始化检查：发生原生异常；异常正文隐藏。" : @"洗衣客户端处理失败，请重试。");
+        }
     });
 }
 @end
