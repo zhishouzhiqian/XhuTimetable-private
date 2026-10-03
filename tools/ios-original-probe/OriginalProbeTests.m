@@ -11,7 +11,10 @@ static NSArray *ProbeTestPreviousFields;
 static NSString *ProbeTestPreviousRequest;
 
 static NSString *ResultForStep(NSArray *rows, NSString *step) {
-    for (NSDictionary *row in rows) if ([row[@"step"] isEqualToString:step]) return row[@"result"];
+    // 同一步会先追加“正在执行”，再追加最终结果；断言必须读取最后一条。
+    for (NSDictionary *row in rows.reverseObjectEnumerator) {
+        if ([row[@"step"] isEqualToString:step]) return row[@"result"];
+    }
     return nil;
 }
 
@@ -92,6 +95,13 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
 
 int main(void) {
     @autoreleasepool {
+        NSArray *progressRows = @[
+            @{@"step": @"签名", @"result": @"正在执行"},
+            @{@"step": @"其它步骤", @"result": @"完成"},
+            @{@"step": @"签名", @"result": @"最终成功"},
+        ];
+        NSCAssert([ResultForStep(progressRows, @"签名") isEqualToString:@"最终成功"], @"读取了进度行而不是最终结果");
+        NSCAssert(ResultForStep(progressRows, @"不存在的步骤") == nil, @"不存在的步骤必须返回空值");
         NSString *root = [NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
         [[NSFileManager defaultManager] createDirectoryAtPath:root withIntermediateDirectories:YES attributes:nil error:nil];
         NSData *content = [@"test-resource" dataUsingEncoding:NSUTF8StringEncoding];
@@ -109,8 +119,10 @@ int main(void) {
         NSString *text = success.description;
         NSCAssert([text containsString:@"6.8.260603"] && ![text containsString:@"TEST_APPKEY_MUST_NOT_APPEAR"], @"成功报告泄露值");
         NSCAssert(ProbeTestKeyCalls == 1 && ProbeTestInitCalls == 1, @"成功流程未调用接口");
-        NSCAssert(ProbeTestSignCalls == 2 && [ResultForStep(success, @"第一次离线签名") containsString:@"必需字段完整"] &&
-            [ResultForStep(success, @"签名输入变化对照") containsString:@"不同"], @"完整签名或输入对照未验证");
+        NSCAssert(ProbeTestSignCalls == 2, @"未执行两次离线签名");
+        NSCAssert([ResultForStep(success, @"第一次离线签名") containsString:@"必需字段完整"], @"第一次签名最终结果不完整");
+        NSCAssert([ResultForStep(success, @"改变正文后离线签名") containsString:@"必需字段完整"], @"第二次签名最终结果不完整");
+        NSCAssert([ResultForStep(success, @"签名输入变化对照") containsString:@"不同"], @"完整签名未随输入变化");
         NSCAssert(![text containsString:@"SECRET_"], @"签名字段泄露");
         ProbeTestFailure = YES;
         NSArray *failure = CampusOriginalProbeRun(manifest, root, nil);
