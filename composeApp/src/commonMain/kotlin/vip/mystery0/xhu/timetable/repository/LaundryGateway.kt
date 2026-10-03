@@ -8,6 +8,8 @@ import vip.mystery0.xhu.timetable.model.laundry.*
  * acknowledgeTerminalPayment 须实时核验服务端终态，微信返回和本地计时不是终态证据。
  */
 interface LaundryGateway {
+    /** 尚未验收付款的平台只提供查询，不展示或调用付款入口。 */
+    val supportsPayment: Boolean get() = true
     suspend fun initialize()
     suspend fun hasSession(): Boolean
     suspend fun verify()

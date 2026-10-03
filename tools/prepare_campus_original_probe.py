@@ -185,10 +185,10 @@ def patch_main(data):
     return bytes(patched)
 
 
-def prepare(ipa, library, output):
+def prepare(ipa, library, output, *, max_library_size=16 * 1024 * 1024):
     if output.exists() or output.resolve() in (ipa.resolve(), library.resolve()):
         raise ValueError("输出必须是新的独立文件。")
-    if not 32 <= library.stat().st_size <= 16 * 1024 * 1024:
+    if not 32 <= library.stat().st_size <= max_library_size:
         raise ValueError("诊断库大小无效。")
     dylib = library.read_bytes()
     info = layout(dylib)

@@ -104,7 +104,25 @@ class LaundrySharedViewModelTest {
         assertTrue(model.state.value.orders.isEmpty())
     }
 
+    @Test fun readOnlyGatewayShowsProgramsAndOrdersWithoutQuoteOrCreate() {
+        val gateway = FakeGateway().apply { supportsPayment = false }
+        val model = model(gateway)
+        model.scanReturned("mock-device", null)
+        model.selectProgram("quick")
+        model.createPayment("3.00")
+        assertFalse(model.state.value.paymentAvailable)
+        assertEquals(LaundryPage.Programs, model.state.value.page)
+        assertEquals("quick", model.state.value.selectedProgram)
+        assertFalse(model.state.value.quoteLoading)
+        assertNull(model.state.value.quote)
+        assertTrue(gateway.quoted.isEmpty())
+        assertEquals(0, gateway.creates)
+        model.refresh()
+        assertTrue(gateway.samples.isNotEmpty())
+    }
+
     private class FakeGateway : LaundryGateway {
+        override var supportsPayment = true
         var session = true
         var pending: LaundryPayment? = null
         var checkout = LaundryPaymentStatus.Unpaid

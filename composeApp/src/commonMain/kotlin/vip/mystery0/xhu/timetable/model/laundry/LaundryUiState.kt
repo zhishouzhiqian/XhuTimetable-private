@@ -37,6 +37,7 @@ data class LaundryPayment(
     val accountMismatch: Boolean = false,
 )
 data class LaundryUiState(
+    val paymentAvailable: Boolean = true,
     val page: LaundryPage = LaundryPage.Loading,
     val busy: Boolean = false,
     val ordersLoading: Boolean = false,

@@ -124,7 +124,7 @@ NSURLRequest *CampusOriginalConfigRequestChecked(NSString *appKey, NSString *utd
 NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInteger networkError,
     BOOL redirected, BOOL oversized) {
     NSString *summary = nil;
-    BOOL success = NO;
+    BOOL success = NO, requiresLogin = NO;
     if (redirected) summary = @"收到跳转；已拒绝跟随；本次未通过";
     else if (oversized || body.length > ProbeResponseLimit) summary = @"响应超过 1 MiB；已停止读取；本次未通过";
     else if (networkError) summary = [NSString stringWithFormat:@"网络失败（错误码 %ld）；无应用层自动重试", (long)networkError];
@@ -150,11 +150,12 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
         if ([ret isKindOfClass:NSArray.class] && [ret count] <= 16) {
             for (id item in ret) {
                 NSString *code = ProbeText(item, 4096) ? [[item componentsSeparatedByString:@"::"] firstObject] : nil;
-                // 未枚举的业务错误只允许短的全大写错误名称；正文及未知自由文本继续隐藏。
-                NSRegularExpression *identifier = [NSRegularExpression regularExpressionWithPattern:@"^(FAIL_(SYS|BIZ)|BIZ|ERROR)_[A-Z_]{1,72}$" options:0 error:nil];
+                // 未枚举错误允许短的规范错误名称或六位以内数字码；正文及未知自由文本继续隐藏。
+                NSRegularExpression *identifier = [NSRegularExpression regularExpressionWithPattern:@"^((FAIL_(SYS|BIZ)|BIZ|ERROR)_[A-Za-z_.]{1,72}|-?[0-9]{1,6})$" options:0 error:nil];
                 BOOL safeIdentifier = code && code.length <= 96 && [identifier numberOfMatchesInString:code options:0 range:NSMakeRange(0, code.length)] == 1;
                 NSString *safe = code && ([known containsObject:code] || safeIdentifier) ? code : @"UNKNOWN_CODE";
                 [codes addObject:safe];
+                requiresLogin = requiresLogin || [@[@"FAIL_SYS_SESSION_EXPIRED", @"FAIL_SYS_SESSION_ERROR", @"FAIL_SYS_TOKEN_EMPTY", @"FAIL_SYS_TOKEN_EXOIRED", @"FAIL_SYS_TOKEN_EXPIRED"] containsObject:safe];
                 allSuccess = allSuccess && [safe isEqualToString:@"SUCCESS"];
             }
         }
@@ -162,7 +163,7 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
         summary = [NSString stringWithFormat:@"HTTP %ld；业务码 %@（响应正文与数据不展示）", (long)status,
             codes.count ? [codes componentsJoinedByString:@", "] : @"无法解析"];
     }
-    return @{@"success": @(success), @"summary": summary};
+    return @{@"success": @(success), @"summary": summary, @"requiresLogin": @(requiresLogin)};
 }
 
 @interface CampusOriginalConfigTransport : NSObject <NSURLSessionDataDelegate, NSURLSessionTaskDelegate>
@@ -217,6 +218,10 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
         if (evidence) {
             NSMutableDictionary *privateResult = [evidence mutableCopy];
             privateResult[@"display"] = CampusOriginalReadDisplay(self.body, self.purpose);
+#ifdef CAMPUS_TIMETABLE_HOST
+            NSDictionary *root = [NSJSONSerialization JSONObjectWithData:self.body options:0 error:nil];
+            privateResult[@"payload"] = root[@"data"];
+#endif
             evidence = [privateResult copy];
         }
         if (!evidence) {

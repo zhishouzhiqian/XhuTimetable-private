@@ -24,7 +24,7 @@ open class LaundryViewModel(
 ) : ViewModel(scope) {
     private val requestDispatcher = ioDispatcher
     private val mutex = Mutex()
-    private val _state = MutableStateFlow(LaundryUiState())
+    private val _state = MutableStateFlow(LaundryUiState(paymentAvailable = client.supportsPayment))
     val state: StateFlow<LaundryUiState> = _state
     private val _command = MutableStateFlow<LaundryCommand?>(null)
     val command: StateFlow<LaundryCommand?> = _command
@@ -123,6 +123,10 @@ open class LaundryViewModel(
     private fun quote(key: String, debounce: Boolean) {
         val device = _state.value.device ?: return
         if (key.isBlank() || !device.canUse) return
+        if (!client.supportsPayment) {
+            _state.update { it.copy(selectedProgram = key, quote = null, quoteLoading = false) }
+            return
+        }
         val version = guard.nextQuote()
         quoteJob?.cancel()
         _state.update { it.copy(selectedProgram = key, quote = null, quoteLoading = true, error = null) }
@@ -143,6 +147,7 @@ open class LaundryViewModel(
     }
 
     fun createPayment(confirmedAmount: String) {
+        if (!client.supportsPayment) return
         val state = _state.value
         if (state.page != LaundryPage.Programs || state.payment != null || state.busy || state.quoteLoading ||
             state.quote?.pay != confirmedAmount || !guard.beginSubmission()) return
@@ -292,7 +297,8 @@ open class LaundryViewModel(
         if (_state.value.page == LaundryPage.Programs) {
             val device = _state.value.device
             if (device == null) { scanReturned(lastResNo, null); return }
-            quote(_state.value.selectedProgram, debounce = false)
+            if (!client.supportsPayment) scanReturned(device.resNo, null)
+            else quote(_state.value.selectedProgram, debounce = false)
             return
         }
         if (refreshJob?.isActive == true) { refreshAgain = true; return }

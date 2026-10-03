@@ -46,7 +46,7 @@ fun LaundryContent(state: LaundryUiState, actions: LaundryActions) {
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text(when (state.page) {
-                    LaundryPage.Programs -> "洗衣下单"
+                    LaundryPage.Programs -> if (state.paymentAvailable) "洗衣下单" else "洗衣程序"
                     LaundryPage.Payment -> "订单付款"
                     LaundryPage.Orders -> "洗衣订单"
                     else -> "洗衣服务"
@@ -64,7 +64,7 @@ fun LaundryContent(state: LaundryUiState, actions: LaundryActions) {
             )
         },
         bottomBar = {
-            if (state.page == LaundryPage.Programs) {
+            if (state.page == LaundryPage.Programs && state.paymentAvailable) {
                 PaymentBar(state) { confirmAmount = state.quote?.pay }
             }
         },
@@ -84,6 +84,8 @@ fun LaundryContent(state: LaundryUiState, actions: LaundryActions) {
                     }
                 }
             }
+            if (!state.paymentAvailable) Text("整合测试：支持登录、扫码与订单查询，暂未开放下单付款。",
+                style = MaterialTheme.typography.bodySmall)
             when (state.page) {
                 LaundryPage.Loading -> {
                     if (state.busy) CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))

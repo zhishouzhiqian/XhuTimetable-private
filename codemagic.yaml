@@ -1,5 +1,48 @@
 # 个人测试构建；私有 Maven 凭据在 Codemagic 应用级变量组中配置。
 workflows:
+  ios-campus-timetable-host:
+    name: 西瓜课表 iOS 校园整合测试（原配载体）
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    environment:
+      xcode: "26.2"
+      java: "21"
+      groups:
+        - private_maven
+    cache:
+      cache_paths:
+        - $HOME/.gradle/caches
+        - $HOME/.gradle/wrapper
+        - $HOME/.konan/dependencies
+    # 仅手动触发；构建共享课表页面与原生客户端，不上传原 IPA。
+    scripts:
+      - name: 准备课表环境和私有依赖
+        script: |
+          set -euo pipefail
+          export GITHUB_USERNAME="${GITHUB_USERNAME:-${NEXUS_USER:-}}"
+          export GITHUB_PASSWORD="${GITHUB_PASSWORD:-${NEXUS_PASSWORD:-}}"
+          if [[ -z "$GITHUB_USERNAME" || -z "$GITHUB_PASSWORD" ]]; then
+            echo "请在 private_maven 变量组配置私有 Maven 凭据。" >&2
+            exit 1
+          fi
+          printf '%s\n' "GITHUB_USERNAME=$GITHUB_USERNAME" "GITHUB_PASSWORD=$GITHUB_PASSWORD" >> "$CM_ENV"
+          if [[ "$(git rev-parse --is-shallow-repository)" == "true" ]]; then
+            git fetch --unshallow
+          fi
+          chmod a+x gradlew
+          mkdir -p "$HOME/.gradle" build/ios-timetable-host/logs
+          printf '%s\n' 'org.gradle.configureondemand=true' >> "$HOME/.gradle/gradle.properties"
+      - name: 验证共享洗衣状态逻辑
+        script: |
+          set -euo pipefail
+          ./gradlew --configure-on-demand composeApp:iosSimulatorArm64Test --stacktrace 2>&1 | tee build/ios-timetable-host/logs/tests.log
+      - name: 编译课表界面、原配客户端及资源
+        script: |
+          set -euo pipefail
+          bash tools/build_campus_timetable_host.sh 2>&1 | tee build/ios-timetable-host/logs/build.log
+    artifacts:
+      - build/ios-timetable-host/XhuCampusTimetableHost.zip
+      - build/ios-timetable-host/logs/*.log
   ios-campus-original-probe:
     name: iOS 校园原配本地诊断库（未签名）
     instance_type: mac_mini_m2

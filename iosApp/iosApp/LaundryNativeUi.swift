@@ -22,8 +22,12 @@ final class LaundryNativeUi: NSObject, IosLaundryNativeUi {
 
     func componentCheck(requestId: Int64) {
         guard begin(requestId) else { return }
+#if CAMPUS_COMPONENT_PROBE
         let controller = LaundryComponentCheckViewController { [weak self] in self?.finish(requestId) }
         present(controller, requestId)
+#else
+        finish(requestId, error: "当前构建未启用组件检查。")
+#endif
     }
 
     func authorize(url: String, requestId: Int64) {
@@ -97,9 +101,11 @@ final class LaundryNativeUi: NSObject, IosLaundryNativeUi {
     }
 
     private func present(_ controller: UIViewController, _ id: Int64) {
-        guard let root = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
+        let sceneRoot = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene })
             .first(where: { $0.activationState == .foregroundActive })?.windows
-            .first(where: { $0.isKeyWindow })?.rootViewController else {
+            .first(where: { $0.isKeyWindow })?.rootViewController
+        // 原配载体使用传统 AppDelegate，未创建 UIWindowScene。
+        guard let root = sceneRoot ?? UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.rootViewController else {
             finish(id, error: "暂时无法打开页面，请重试。")
             return
         }
