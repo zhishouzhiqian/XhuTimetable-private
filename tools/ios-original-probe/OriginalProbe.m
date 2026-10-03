@@ -610,11 +610,19 @@ static void ProbeQuoteBatch(NSDictionary *context, NSDictionary *session, NSDict
                            NSArray *keys, NSUInteger index, void (^emit)(NSString *, NSString *), void (^invalidate)(void), void (^completion)(void)) {
     if (index >= keys.count) { completion(); return; }
     NSString *label = [NSString stringWithFormat:@"程序报价对照 %lu", (unsigned long)(index + 1)];
+    for (NSDictionary *row in CampusOriginalRenderAudit(payload, resNo, keys[index]))
+        emit([NSString stringWithFormat:@"%@ / %@", label, row[@"step"]], row[@"result"]);
     NSDictionary *input = nil; NSURLRequest *request = nil;
     @try {
         input = CampusPaymentRenderInput(payload, resNo, keys[index]);
-        request = ProbeAccountRequest(context, CampusPaymentBody(CampusOriginalPurposeRender, input), session, CampusOriginalPurposeRender, emit);
-    } @catch (NSException *exception) { emit(label, @"设备参数或固定报价正文未通过；未发送，不展示异常正文"); }
+    } @catch (NSException *exception) { emit([label stringByAppendingString:@"设备转换失败点"], CampusOriginalQuoteError(exception)); }
+    if (input) {
+        @try {
+            NSString *body = CampusPaymentBody(CampusOriginalPurposeRender, input);
+            emit([label stringByAppendingString:@"固定正文"], body ? @"通过；进入本阶段新签名" : @"未通过；未进入 SDK 签名");
+            if (body) request = ProbeAccountRequest(context, body, session, CampusOriginalPurposeRender, emit);
+        } @catch (NSException *exception) { emit([label stringByAppendingString:@"签名或 POST 构造"], CampusOriginalQuoteError(exception)); }
+    }
     if (!request) {
         emit(label, @"请求准备未通过；继续其它程序的独立报价核对");
         ProbeQuoteBatch(context, session, payload, resNo, keys, index + 1, emit, invalidate, completion); return;
@@ -803,7 +811,7 @@ void CampusOriginalProbeRefreshRun(NSDictionary *context, void (^progress)(NSArr
     self.report = [[UITextView alloc] init];
     self.report.editable = NO;
     self.report.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.report.text = @"诊断版本：13\n当前运行专用 Application/AppDelegate\n\n先点击联网综合检查，配置、注册与 ID 复用全部通过后，本人登录按钮才启用。本人登录由你在官方网页手动操作，取得授权后依次交换校园会话、查询本人资料和洗衣运行订单；不下单、不付款。账号、授权码与会话不写入报告或持久化。\n离线检查仍需断网。原二进制的类加载代码可能执行。\n基础检查每个进程一次；登录后可手动刷新，退出即清除本次会话。";
+    self.report.text = @"诊断版本：14\n当前运行专用 Application/AppDelegate\n\n先点击联网综合检查，配置、注册与 ID 复用全部通过后，本人登录按钮才启用。本人登录由你在官方网页手动操作，取得授权后依次交换校园会话、查询本人资料和洗衣运行订单；不下单、不付款。账号、授权码与会话不写入报告或持久化。\n离线检查仍需断网。原二进制的类加载代码可能执行。\n基础检查每个进程一次；登录后可手动刷新，退出即清除本次会话。";
     [stack addArrangedSubview:self.report];
     self.start = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.start setTitle:@"开始本地检查" forState:UIControlStateNormal];
@@ -879,7 +887,7 @@ void CampusOriginalProbeRefreshRun(NSDictionary *context, void (^progress)(NSArr
     [self.readRows removeAllObjects]; [self updateReadControls];
     __block BOOL finished = NO;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：13\n本次手动刷新（原配运行环境）\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：14\n本次手动刷新（原配运行环境）\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
@@ -910,7 +918,7 @@ void CampusOriginalProbeRefreshRun(NSDictionary *context, void (^progress)(NSArr
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：13\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：14\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
@@ -954,7 +962,7 @@ void CampusOriginalProbeRefreshRun(NSDictionary *context, void (^progress)(NSArr
         self.report.text = [self.report.text stringByAppendingString:@"\n本人授权：新回调已取得（授权码不展示）；开始校园会话交换及只读验证。\n"];
         __block BOOL finished = NO;
         void (^show)(NSArray *) = ^(NSArray *rows) {
-            NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：13\n当前运行专用 Application/AppDelegate\n\n"];
+            NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：14\n当前运行专用 Application/AppDelegate\n\n"];
             for (NSDictionary *row in [self.networkRows arrayByAddingObjectsFromArray:rows]) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
             self.report.text = text;
         };
@@ -979,7 +987,7 @@ void CampusOriginalProbeRefreshRun(NSDictionary *context, void (^progress)(NSArr
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：13\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：14\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };

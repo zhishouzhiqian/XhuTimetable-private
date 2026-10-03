@@ -10,6 +10,51 @@ static NSString *Shape(id value) {
     if ([value isKindOfClass:NSArray.class]) return @"数组";
     return @"其它类型";
 }
+NSString *CampusOriginalQuoteError(NSException *exception) {
+    NSSet *allowed = [NSSet setWithArray:@[@"QUOTE_DEVICE_ID", @"QUOTE_PROGRAM_DESCRIPTION", @"QUOTE_RENDER_BODY",
+        @"DEVICE_MISMATCH", @"DEVICE_UNAVAILABLE", @"UNSUPPORTED_DEVICE", @"PROGRAM_UNAVAILABLE", @"QUOTE_AMOUNT_INVALID", @"QUOTE_MISMATCH"]];
+    if (exception.reason && [allowed containsObject:exception.reason]) return exception.reason;
+    if ([allowed containsObject:exception.name]) return exception.name;
+    return @"原生类型或结构异常（正文隐藏）";
+}
+NSArray *CampusOriginalRenderAudit(NSDictionary *payload, NSString *resNo, NSString *key) {
+    NSMutableArray *rows = [NSMutableArray array];
+    void (^emit)(NSString *, NSString *) = ^(NSString *step, NSString *result) { [rows addObject:@{@"step": step, @"result": result}]; };
+    id inner = [payload isKindOfClass:NSDictionary.class] ? payload[@"data"] : nil;
+    id device = [inner isKindOfClass:NSDictionary.class] ? inner[@"deviceResponse"] : nil;
+    emit(@"设备原始结构", Shape(device));
+    if (![device isKindOfClass:NSDictionary.class]) return rows;
+    for (NSString *field in @[@"deviceCode", @"deviceId", @"deviceCanUse", @"deviceType", @"modelType", @"campusAreaId", @"deviceWorkingModelDTOS"])
+        emit([@"设备字段 / " stringByAppendingString:field], Shape(device[field]));
+    emit(@"机器编号对照", [device[@"deviceCode"] isEqual:resNo] ? @"通过" : @"未通过");
+    emit(@"设备 ID 付款格式", CampusPaymentIdentifier(device[@"deviceId"]) ? @"通过" : @"未通过（值隐藏）");
+    emit(@"程序 key 付款格式", CampusPaymentIdentifier(key) ? @"通过" : @"未通过；页面接受此标识，付款模型拒绝（值隐藏）");
+    emit(@"洗衣设备类型", [device[@"deviceType"] isEqual:@"WASHING_MACHINE"] ? @"通过" : @"未通过");
+    emit(@"固定时长计费类型", [device[@"modelType"] isEqual:@"FIXED_TIME_CHARGE"] ? @"通过" : @"未通过");
+    @try { CampusPaymentCents(device[@"campusAreaId"]); emit(@"campusAreaId 非负整数", @"通过"); }
+    @catch (NSException *exception) { emit(@"campusAreaId 非负整数", @"未通过（值隐藏）"); }
+    NSArray *modes = [device[@"deviceWorkingModelDTOS"] isKindOfClass:NSArray.class] ? device[@"deviceWorkingModelDTOS"] : @[];
+    NSUInteger matches = 0;
+    for (id mode in modes) {
+        if (![mode isKindOfClass:NSDictionary.class] || ![mode[@"priceModelList"] isKindOfClass:NSArray.class]) continue;
+        for (id price in mode[@"priceModelList"]) {
+            if (![price isKindOfClass:NSDictionary.class] || ![price[@"key"] isEqual:key]) continue;
+            matches++;
+            for (NSString *field in @[@"key", @"isOpen", @"desc", @"price", @"priceYuan"])
+                emit([@"所选程序字段 / " stringByAppendingString:field], Shape(price[field]));
+            emit(@"所属模式 isSupport", Shape(mode[@"isSupport"]));
+            emit(@"所属模式 attrName", Shape(mode[@"attrName"]));
+            @try { CampusPaymentCents(price[@"price"]); emit(@"程序 price 整数分", @"通过（值隐藏）"); }
+            @catch (NSException *exception) { emit(@"程序 price 整数分", @"未通过（值隐藏）"); }
+        }
+    }
+    emit(@"程序匹配数量", [NSString stringWithFormat:@"%lu 项", (unsigned long)matches]);
+    @try {
+        NSDictionary *input = CampusPaymentRenderInput(payload, resNo, key);
+        emit(@"设备转换及报价正文", CampusPaymentBody(CampusOriginalPurposeRender, input) ? @"通过" : @"QUOTE_RENDER_BODY");
+    } @catch (NSException *exception) { emit(@"设备转换及报价正文", CampusOriginalQuoteError(exception)); }
+    return rows;
+}
 NSArray *CampusOriginalQuoteAudit(NSDictionary *input, id response) {
     NSMutableArray *rows = [NSMutableArray array];
     void (^emit)(NSString *, NSString *) = ^(NSString *step, NSString *result) { [rows addObject:@{@"step": step, @"result": result}]; };

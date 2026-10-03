@@ -6,6 +6,22 @@ int main(void) {
         for (NSNumber *purpose in @[@(CampusOriginalPurposeSequence), @(CampusOriginalPurposeCreate), @(CampusOriginalPurposeCheckout), @(CampusOriginalPurposePaymethod)])
             NSCAssert(CampusOriginalAccountAPI(purpose.integerValue) == nil, @"轻量诊断开放了创建或付款入口");
         NSDictionary *input = CampusPaymentRenderInput(PaymentDevice(), @"M1", @"standard");
+        NSCAssert([CampusOriginalRenderAudit(PaymentDevice(), @"M1", @"standard").lastObject[@"result"] isEqual:@"通过"], @"正常设备转换诊断未通过");
+        for (NSString *field in @[@"deviceId", @"campusAreaId", @"price", @"key", @"deviceType"]) {
+            NSData *bytes = [NSJSONSerialization dataWithJSONObject:PaymentDevice() options:0 error:nil];
+            NSMutableDictionary *payload = [NSJSONSerialization JSONObjectWithData:bytes options:NSJSONReadingMutableContainers error:nil];
+            NSMutableDictionary *device = payload[@"data"][@"deviceResponse"];
+            NSMutableDictionary *price = device[@"deviceWorkingModelDTOS"][0][@"priceModelList"][0];
+            NSString *key = @"standard";
+            if ([field isEqual:@"key"]) { key = @"private.program:value"; price[@"key"] = key; }
+            else if ([field isEqual:@"price"]) [price removeObjectForKey:field];
+            else if ([field isEqual:@"deviceType"]) device[field] = @"private-invalid-type";
+            else [device removeObjectForKey:field];
+            NSArray *audit = CampusOriginalRenderAudit(payload, @"M1", key);
+            NSString *report = [[NSString alloc] initWithData:[NSJSONSerialization dataWithJSONObject:audit options:0 error:nil] encoding:NSUTF8StringEncoding];
+            NSCAssert(![audit.lastObject[@"result"] isEqual:@"通过"] && [report containsString:field] && ![report containsString:@"private.program:value"] && ![report containsString:@"private-invalid-type"], @"本地参数失败点丢失或泄漏字段值");
+        }
+        NSCAssert(![CampusOriginalQuoteError([NSException exceptionWithName:@"private-exception" reason:@"private-token" userInfo:nil]) containsString:@"private"], @"本地异常内容进入报告");
         NSDictionary *identity = @{@"x-appkey": @"test-key", @"x-utdid": @"YWJjZGVmZ2hpamtsbW5vcHFy", @"x-ttid": @"test@campus_iPhone_5.7.2", @"deviceID": @"test-device"};
         NSDictionary *factors = @{@"x-sign": @"test/sign+", @"x-mini-wua": @"test-wua", @"x-umt": @"test-umt", @"x-sgext": @"test-ext"};
         NSString *(^encode)(NSString *) = ^NSString *(NSString *text) {
