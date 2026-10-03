@@ -404,6 +404,8 @@ open class LaundryViewModel(
             "PAYMENT_ACCOUNT_MISMATCH" -> "有另一账号的未完成订单，请使用原账号登录。"
             "PAYMENT_PENDING" -> "请先处理未完成的订单。"
             "PAYMENT_MISMATCH", "QUOTE_MISMATCH", "ORDER_MISMATCH" -> "订单信息不一致，请重新查询。"
+            "SESSION_STORAGE_FAILED" -> "无法保存或清除校园登录状态，请检查当前容器的 Keychain 支持后重试。"
+            "SESSION_VERIFICATION_REQUIRED" -> "校园登录状态尚未验证，请重新查询。"
             "WECHAT_CHANNEL_UNAVAILABLE" -> "暂时无法使用微信付款，请稍后重试。"
             "PAYMENT_NOT_INIT" -> "付款状态已变化，请重新查询。"
             "DEVICE_UNAVAILABLE" -> "设备暂不可用，请选择其他设备。"

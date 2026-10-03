@@ -18,6 +18,20 @@
 }
 - (void)resetQuote { self.resNo = nil; self.programKey = nil; self.renderInput = nil; self.renderQuote = nil; }
 - (NSString *)safeError:(NSException *)exception {
+    // 仅投影本地固定检查点，不能把服务端字段、标识或任意异常正文带到界面。
+    NSDictionary *stages = @{@"QUOTE_DEVICE_ID": @"设备详情中的 deviceId 缺失或类型未通过",
+        @"QUOTE_PROGRAM_DESCRIPTION": @"设备程序描述或属性名未通过",
+        @"QUOTE_RENDER_BODY": @"本次报价请求正文未通过固定契约；未发送报价请求",
+        @"QUOTE_RESPONSE_OBJECT": @"报价 response 不是对象",
+        @"QUOTE_RESOURCE_MISSING": @"报价 resNo 缺失或类型未通过",
+        @"QUOTE_RESOURCE_DIFFERENT": @"报价 resNo 与本次机器编号不同",
+        @"QUOTE_BUSINESS_MISSING": @"报价 businessType 缺失",
+        @"QUOTE_BUSINESS_DIFFERENT": @"报价 businessType 与洗衣业务不同",
+        @"QUOTE_ITEMS_SHAPE": @"报价 serviceItemDTOList 不是单项对象数组",
+        @"QUOTE_PROGRAM_MISSING": @"报价 serviceItemId 缺失或类型未通过",
+        @"QUOTE_PROGRAM_DIFFERENT": @"报价 serviceItemId 与所选程序不同"};
+    NSString *stage = [exception.name isEqual:@"QUOTE_MISMATCH"] ? stages[exception.reason] : nil;
+    if (stage) return [@"CAMPUS_PAYMENT_FAILED\n报价字段核对：" stringByAppendingString:stage];
     NSSet *codes = [NSSet setWithArray:@[@"PAYMENT_STORAGE_FAILED", @"PAYMENT_ACCOUNT_MISMATCH", @"PAYMENT_PENDING", @"QUOTE_REQUIRED",
         @"QUOTE_MISMATCH", @"QUOTE_AMOUNT_INVALID", @"PRICE_CHANGED", @"DEVICE_UNAVAILABLE", @"UNSUPPORTED_DEVICE", @"DEVICE_MISMATCH",
         @"PROGRAM_UNAVAILABLE", @"CREATE_UNCERTAIN", @"PAYMENT_MISMATCH", @"PAYMENT_NOT_INIT", @"WECHAT_CHANNEL_UNAVAILABLE"]];

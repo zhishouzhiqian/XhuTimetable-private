@@ -7,6 +7,15 @@
 NSDictionary *CampusPaymentLoad(void) { return @{}; }
 void CampusPaymentSave(NSDictionary *intent) { NSCAssert(NO, @"生命周期测试不应写付款意图"); }
 void CampusPaymentClear(void) { NSCAssert(NO, @"生命周期测试不应清付款意图"); }
+static NSDictionary *savedSession;
+static BOOL storageFails, sessionExpires;
+static NSUInteger profileCalls;
+NSDictionary *CampusSessionLoad(NSDictionary *context) { return savedSession; }
+void CampusSessionSave(NSDictionary *session, NSDictionary *context) {
+    if (storageFails) @throw [NSException exceptionWithName:@"SESSION_STORAGE_FAILED" reason:nil userInfo:nil];
+    savedSession = [session copy];
+}
+void CampusSessionClear(void) { savedSession = nil; }
 static NSArray *probeRows;
 static BOOL probeReady;
 static NSUInteger probeCalls;
@@ -18,11 +27,16 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *root,
 }
 NSURLRequest *CampusTimetableAccountRequest(NSDictionary *context, NSDictionary *session,
     CampusOriginalPurpose purpose, NSDictionary *selection, NSString *code) {
-    return purpose == CampusOriginalPurposeLogin ? [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://example.invalid/"]] : nil;
+    return purpose == CampusOriginalPurposeLogin || purpose == CampusOriginalPurposeProfile ? [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://example.invalid/"]] : nil;
 }
 void CampusOriginalAccountSend(NSURLRequest *request, CampusOriginalPurpose purpose,
     void (^completion)(NSDictionary *, NSDictionary *)) {
-    NSCAssert(purpose == CampusOriginalPurposeLogin, @"测试仅允许桩登录交换");
+    if (purpose == CampusOriginalPurposeProfile) {
+        profileCalls++;
+        completion(sessionExpires ? @{@"requiresLogin": @YES} : @{@"success": @YES}, sessionExpires ? nil : @{@"verified": @YES});
+        return;
+    }
+    NSCAssert(purpose == CampusOriginalPurposeLogin, @"测试仅允许桩登录与验证");
     completion(@{@"success": @YES}, @{@"sid": @"test-session", @"uid": @"test-user"});
 }
 NSURL *CampusOriginalAuthorizationURL(NSString *key) { return nil; }
@@ -81,7 +95,27 @@ int main(void) {
         probeReady = NO; probeRows = @[];
         NSCAssert([Call([CampusTimetableClient new], @"initialize")[@"error"] containsString:@"没有返回可用阶段记录"],
             @"空报告缺少回退提示");
-        puts("原生客户端初始化阶段、失败重试与就绪缓存测试通过；未执行厂商组件。");
+        probeReady = YES;
+        CampusTimetableClient *first = [CampusTimetableClient new];
+        NSCAssert(Call(first, @"initialize")[@"error"] == NSNull.null && Call(first, @"exchange")[@"error"] == NSNull.null, @"持久化测试登录失败");
+        NSCAssert(savedSession != nil, @"登录会话没有保存");
+        CampusTimetableClient *restarted = [CampusTimetableClient new];
+        NSCAssert(Call(restarted, @"initialize")[@"error"] == NSNull.null, @"重启初始化失败");
+        AssertSession(restarted, YES);
+        NSCAssert([Call(restarted, @"pendingPayment")[@"error"] isEqual:@"SESSION_VERIFICATION_REQUIRED"], @"恢复会话未验证就使用付款入口");
+        NSUInteger before = profileCalls;
+        NSCAssert(Call(restarted, @"verify")[@"error"] == NSNull.null && profileCalls == before + 1, @"恢复会话没有服务端验证");
+        NSCAssert(Call(restarted, @"pendingPayment")[@"error"] == NSNull.null, @"验证后不能查询待付款记录");
+        sessionExpires = YES;
+        NSCAssert([Call(restarted, @"verify")[@"error"] isEqual:@"SESSION_EXPIRED"] && savedSession == nil, @"失效会话没有清除持久化记录");
+        AssertSession(restarted, NO);
+        sessionExpires = NO; storageFails = YES;
+        NSCAssert([Call(restarted, @"exchange")[@"error"] isEqual:@"SESSION_STORAGE_FAILED"], @"会话保存失败被当作成功");
+        AssertSession(restarted, NO);
+        storageFails = NO;
+        NSCAssert(Call(restarted, @"exchange")[@"error"] == NSNull.null, @"存储恢复后不能重新登录");
+        NSCAssert(Call(restarted, @"logout")[@"error"] == NSNull.null && savedSession == nil, @"退出没有删除持久化会话");
+        puts("原生客户端初始化、重试、会话重启恢复、服务端验证与失效清理测试通过；未执行厂商组件或真实 Keychain。");
     }
     return 0;
 }

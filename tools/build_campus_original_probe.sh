@@ -14,13 +14,23 @@ xcrun --sdk macosx clang -fobjc-arc -fblocks -DCAMPUS_ORIGINAL_PROBE_TEST=1 \
   tools/ios-original-probe/OriginalLoginProbeTests.m \
   -framework Foundation -framework CoreFoundation -o "$output/native-tests"
 "$output/native-tests"
+# 轻量报价诊断不编译 Compose/Gradle，只增加固定 Render 请求；创建/付款 API 被关闭。
+xcrun --sdk macosx clang -fobjc-arc -fblocks -DCAMPUS_QUOTE_DIAGNOSTIC=1 -DCAMPUS_ORIGINAL_PROBE_TEST=1 \
+  tools/ios-original-probe/OriginalQuoteProbe.m tools/ios-original-probe/OriginalQuoteProbeTests.m \
+  tools/ios-timetable-host/CampusTimetablePaymentProtocol.m \
+  tools/ios-original-probe/OriginalLoginProbe.m tools/ios-original-probe/OriginalDeviceProbe.m \
+  tools/ios-original-probe/OriginalNetworkProbe.m \
+  -framework Foundation -framework CoreFoundation -o "$output/quote-tests"
+"$output/quote-tests"
 xcrun --sdk iphoneos clang -fobjc-arc -fblocks -fvisibility=hidden -dynamiclib \
+  -DCAMPUS_QUOTE_DIAGNOSTIC=1 \
   -target arm64-apple-ios16.0 -isysroot "$(xcrun --sdk iphoneos --show-sdk-path)" \
   -install_name '@executable_path/CampusOriginalProbe.dylib' \
   tools/ios-original-probe/OriginalProbe.m tools/ios-original-probe/OriginalNetworkProbe.m \
   tools/ios-original-probe/OriginalDeviceProbe.m \
   tools/ios-original-probe/OriginalLoginProbe.m tools/ios-original-probe/OriginalAuthorizationView.m \
   tools/ios-original-probe/OriginalReadResultsView.m \
+  tools/ios-original-probe/OriginalQuoteProbe.m tools/ios-timetable-host/CampusTimetablePaymentProtocol.m \
   -framework Foundation -framework CoreFoundation -framework CoreGraphics -framework UIKit -framework WebKit \
   -o "$output/CampusOriginalProbe.dylib"
 xcrun nm -gU "$output/CampusOriginalProbe.dylib" > "$output/exports.txt"

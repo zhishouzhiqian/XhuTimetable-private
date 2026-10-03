@@ -3,6 +3,9 @@
 #include <limits.h>
 
 void CampusPaymentFail(NSString *code) { @throw [NSException exceptionWithName:code reason:code userInfo:nil]; }
+static void QuoteMismatch(NSString *stage) {
+    @throw [NSException exceptionWithName:@"QUOTE_MISMATCH" reason:stage userInfo:nil];
+}
 static BOOL Text(id value, NSUInteger maximum) {
     return [value isKindOfClass:NSString.class] && [value length] && [value length] <= maximum &&
         [value rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location == NSNotFound;
@@ -131,20 +134,26 @@ NSDictionary *CampusPaymentRenderInput(NSDictionary *payload, NSString *resNo, N
     }
     if (!selected) CampusPaymentFail(@"PROGRAM_UNAVAILABLE");
     long long price = CampusPaymentCents(selected[@"price"]);
-    if (!ID(device[@"deviceId"]) || !Text(selected[@"desc"], 256) || !Short(attrName)) CampusPaymentFail(@"QUOTE_MISMATCH");
+    if (!ID(device[@"deviceId"])) QuoteMismatch(@"QUOTE_DEVICE_ID");
+    if (!Text(selected[@"desc"], 256) || !Short(attrName)) QuoteMismatch(@"QUOTE_PROGRAM_DESCRIPTION");
     NSDictionary *input = @{@"isv": @"CAMPUS", @"businessType": @"WASH_AND_CARE", @"orderTypeCode": @"SERVICE_ORDER", @"resNo": resNo,
         @"deviceId": ID(device[@"deviceId"]), @"campusAreaCode": @(CampusPaymentCents(device[@"campusAreaId"])), @"paymentChannel": @"TMXY_APP",
         @"deviceType": device[@"deviceType"], @"modelType": device[@"modelType"], @"promotionDetailDTOList": @[],
         @"serviceItemDTOList": @[@{@"serviceItemId": key, @"serviceItemName": selected[@"desc"], @"buyAmount": @"1",
             @"unitPrice": @(price), @"linePriceFee": @(price), @"attrName": attrName}]};
-    if (!CampusPaymentBody(CampusOriginalPurposeRender, input)) CampusPaymentFail(@"QUOTE_MISMATCH");
+    if (!CampusPaymentBody(CampusOriginalPurposeRender, input)) QuoteMismatch(@"QUOTE_RENDER_BODY");
     return input;
 }
 NSDictionary *CampusPaymentQuote(NSDictionary *input, NSDictionary *quote) {
-    if (![quote isKindOfClass:NSDictionary.class] || ![ID(input[@"resNo"]) isEqual:ID(quote[@"resNo"])] ||
-        ![quote[@"businessType"] isEqual:@"WASH_AND_CARE"]) CampusPaymentFail(@"QUOTE_MISMATCH");
-    ValidateItems(quote[@"serviceItemDTOList"]);
-    if (![ID(input[@"serviceItemDTOList"][0][@"serviceItemId"]) isEqual:ID(quote[@"serviceItemDTOList"][0][@"serviceItemId"])]) CampusPaymentFail(@"QUOTE_MISMATCH");
+    if (![quote isKindOfClass:NSDictionary.class]) QuoteMismatch(@"QUOTE_RESPONSE_OBJECT");
+    if (!ID(quote[@"resNo"])) QuoteMismatch(@"QUOTE_RESOURCE_MISSING");
+    if (![ID(input[@"resNo"]) isEqual:ID(quote[@"resNo"])]) QuoteMismatch(@"QUOTE_RESOURCE_DIFFERENT");
+    if (!quote[@"businessType"] || quote[@"businessType"] == NSNull.null) QuoteMismatch(@"QUOTE_BUSINESS_MISSING");
+    if (![quote[@"businessType"] isEqual:@"WASH_AND_CARE"]) QuoteMismatch(@"QUOTE_BUSINESS_DIFFERENT");
+    NSArray *items = quote[@"serviceItemDTOList"];
+    if (![items isKindOfClass:NSArray.class] || items.count != 1 || ![items[0] isKindOfClass:NSDictionary.class]) QuoteMismatch(@"QUOTE_ITEMS_SHAPE");
+    if (!ID(items[0][@"serviceItemId"])) QuoteMismatch(@"QUOTE_PROGRAM_MISSING");
+    if (![ID(input[@"serviceItemDTOList"][0][@"serviceItemId"]) isEqual:ID(items[0][@"serviceItemId"])]) QuoteMismatch(@"QUOTE_PROGRAM_DIFFERENT");
     long long total = CampusPaymentCents(quote[@"totalAmount"]), discount = CampusPaymentCents(quote[@"discountAmount"]), pay = CampusPaymentCents(quote[@"actualPayAmount"]);
     if (discount > total || pay != total - discount) CampusPaymentFail(@"QUOTE_AMOUNT_INVALID");
     return @{@"program": input[@"serviceItemDTOList"][0][@"serviceItemName"], @"total": CampusPaymentYuan(total),

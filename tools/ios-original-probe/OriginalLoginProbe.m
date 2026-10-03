@@ -1,6 +1,6 @@
 #import "OriginalNetworkProbe.h"
 #import <CoreFoundation/CoreFoundation.h>
-#ifdef CAMPUS_TIMETABLE_HOST
+#if defined(CAMPUS_TIMETABLE_HOST) || defined(CAMPUS_QUOTE_DIAGNOSTIC)
 #import "../ios-timetable-host/CampusTimetablePaymentProtocol.h"
 #endif
 
@@ -80,12 +80,14 @@ NSString *CampusOriginalLoginBody(NSDictionary *info, NSDictionary *risk, NSDict
 }
 
 NSString *CampusOriginalAccountAPI(CampusOriginalPurpose purpose) {
-#ifdef CAMPUS_TIMETABLE_HOST
+#if defined(CAMPUS_TIMETABLE_HOST) || defined(CAMPUS_QUOTE_DIAGNOSTIC)
     if (purpose == CampusOriginalPurposeRender) return @"mtop.tmall.campus.share.order.render.execute";
+#ifdef CAMPUS_TIMETABLE_HOST
     if (purpose == CampusOriginalPurposeSequence) return @"mtop.tmall.campus.share.general.uuid.get";
     if (purpose == CampusOriginalPurposeCreate) return @"mtop.tmall.campus.share.order.create.execute";
     if (purpose == CampusOriginalPurposeCheckout) return @"mtop.tmall.campus.cashier.checkout.query";
     if (purpose == CampusOriginalPurposePaymethod) return @"mtop.tmall.campus.cashier.paymethod.query";
+#endif
 #endif
     if (purpose == CampusOriginalPurposeLogin) return @"mtop.taobao.mloginservice.snslogin";
     if (purpose == CampusOriginalPurposeProfile) return @"mtop.tmall.campus.member.app.user.get";
@@ -150,7 +152,7 @@ static NSDictionary *AccountJSON(NSString *body) {
 
 static BOOL AccountBodyValid(NSString *body, CampusOriginalPurpose purpose, NSDictionary *identity) {
     NSDictionary *object = AccountJSON(body);
-#ifdef CAMPUS_TIMETABLE_HOST
+#if defined(CAMPUS_TIMETABLE_HOST) || defined(CAMPUS_QUOTE_DIAGNOSTIC)
     if (CampusPaymentPurpose(purpose)) {
         id query = purpose <= CampusOriginalPurposeCreate ? AccountJSON(object[@"requestJson"]) : object;
         NSDictionary *expected = AccountJSON(CampusPaymentBody(purpose, query));
@@ -247,7 +249,7 @@ NSDictionary *CampusOriginalAccountEvidence(NSData *body, CampusOriginalPurpose 
     id root = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
     id data = [root isKindOfClass:NSDictionary.class] ? root[@"data"] : nil;
     if (![data isKindOfClass:NSDictionary.class]) return nil;
-#ifdef CAMPUS_TIMETABLE_HOST
+#if defined(CAMPUS_TIMETABLE_HOST) || defined(CAMPUS_QUOTE_DIAGNOSTIC)
     if (CampusPaymentPurpose(purpose)) return CampusPaymentDataValid(data, purpose) ? @{@"verified": @YES} : nil;
 #endif
     if (purpose == CampusOriginalPurposeLogin) {

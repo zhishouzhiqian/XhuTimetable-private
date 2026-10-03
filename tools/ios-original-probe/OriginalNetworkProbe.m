@@ -218,7 +218,7 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
         if (evidence) {
             NSMutableDictionary *privateResult = [evidence mutableCopy];
             privateResult[@"display"] = CampusOriginalReadDisplay(self.body, self.purpose);
-#ifdef CAMPUS_TIMETABLE_HOST
+#if defined(CAMPUS_TIMETABLE_HOST) || defined(CAMPUS_QUOTE_DIAGNOSTIC)
             NSDictionary *root = [NSJSONSerialization JSONObjectWithData:self.body options:0 error:nil];
             privateResult[@"payload"] = root[@"data"];
 #endif
@@ -228,7 +228,7 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
             NSString *reason = self.purpose == CampusOriginalPurposeLogin ? @"returnValue.sid/hid 有效值未通过" :
                 self.purpose == CampusOriginalPurposeProfile ? @"资料 openUserId/phone 身份字段未通过" :
                 [@"只读业务结构未通过：" stringByAppendingString:CampusOriginalAccountShape(self.body, self.purpose)];
-            #ifdef CAMPUS_TIMETABLE_HOST
+            #if defined(CAMPUS_TIMETABLE_HOST) || defined(CAMPUS_QUOTE_DIAGNOSTIC)
             if (self.purpose >= CampusOriginalPurposeRender && self.purpose <= CampusOriginalPurposePaymethod) reason = @"付款响应结构未通过";
 #endif
             result = @{@"success": @NO, @"summary": [NSString stringWithFormat:@"HTTP/业务码通过，但 %@（数据隐藏）", reason]};

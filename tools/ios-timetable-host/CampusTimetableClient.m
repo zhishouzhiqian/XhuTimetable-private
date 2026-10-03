@@ -30,6 +30,7 @@ static NSString *CampusInitializationReport(NSArray *rows) {
 @property(nonatomic, strong) dispatch_queue_t queue;
 @property(nonatomic, copy) NSDictionary *context;
 @property(nonatomic, copy) NSDictionary *session;
+@property(nonatomic) BOOL sessionVerified;
 @property(nonatomic) BOOL busy;
 @property(nonatomic, strong) CampusTimetablePayment *payment;
 @end
@@ -58,7 +59,11 @@ static NSString *CampusInitializationReport(NSArray *rows) {
     }
     CampusOriginalAccountSend(request, purpose, ^(NSDictionary *outcome, NSDictionary *evidence) {
         dispatch_async(self.queue, ^{
-            if ([outcome[@"requiresLogin"] boolValue]) { self.session = nil; completion(nil, @"SESSION_EXPIRED"); }
+            if ([outcome[@"requiresLogin"] boolValue]) {
+                self.session = nil; self.sessionVerified = NO; [self.payment resetQuote];
+                @try { CampusSessionClear(); } @catch (NSException *exception) { }
+                completion(nil, @"SESSION_EXPIRED");
+            }
             else if (![outcome[@"success"] boolValue] || !evidence) {
                 if (CampusPaymentPurpose(purpose)) {
                     NSString *stage = @{@(CampusOriginalPurposeRender): @"实时报价", @(CampusOriginalPurposeSequence): @"订单编号",
@@ -109,11 +114,15 @@ static NSString *CampusInitializationReport(NSArray *rows) {
                 CampusOriginalProbeNetworkRun(NSBundle.mainBundle.infoDictionary[@"CampusOriginalProbe"], NSBundle.mainBundle.bundlePath,
                     nil, ^(NSDictionary *ready) { prepared = ready; }, ^(NSArray *rows) {
                         NSString *failure = prepared ? nil : CampusInitializationReport(rows);
-                        dispatch_async(self.queue, ^{ self.context = prepared; finish(prepared ? @{} : nil, failure); });
+                        dispatch_async(self.queue, ^{
+                            self.context = prepared;
+                            if (prepared) { self.session = CampusSessionLoad(prepared); self.sessionVerified = NO; }
+                            finish(prepared ? @{} : nil, failure);
+                        });
                     });
                 return;
             }
-            if ([action isEqual:@"logout"]) { [self.payment resetQuote]; self.session = nil; finish(@{}, nil); return; }
+            if ([action isEqual:@"logout"]) { [self.payment resetQuote]; self.session = nil; self.sessionVerified = NO; CampusSessionClear(); finish(@{}, nil); return; }
             if ([action isEqual:@"hasSession"]) { finish(@{@"present": self.session ? @YES : @NO}, nil); return; }
             if (!self.context) { finish(nil, @"校园客户端尚未初始化。"); return; }
             if ([action isEqual:@"authorizationUrl"]) {
@@ -121,19 +130,27 @@ static NSString *CampusInitializationReport(NSArray *rows) {
                 finish(url ? @{@"url": url.absoluteString} : nil, nil); return;
             }
             if ([action isEqual:@"exchange"]) {
-                [self.payment resetQuote]; self.session = nil;
+                [self.payment resetQuote]; self.session = nil; self.sessionVerified = NO; CampusSessionClear();
                 if ([input count] != 1 || ![input[@"code"] isKindOfClass:NSString.class]) { finish(nil, @"授权结果无效。"); return; }
                 [self query:CampusOriginalPurposeLogin selection:nil code:input[@"code"] completion:^(NSDictionary *evidence, NSString *error) {
-                    if (evidence) self.session = @{@"sid": evidence[@"sid"], @"uid": evidence[@"uid"]};
+                    if (evidence) {
+                        NSDictionary *session = @{@"sid": evidence[@"sid"], @"uid": evidence[@"uid"]};
+                        @try { CampusSessionSave(session, self.context); self.session = session; }
+                        @catch (NSException *exception) { finish(nil, @"SESSION_STORAGE_FAILED"); return; }
+                    }
                     finish(evidence ? @{} : nil, error);
                 }]; return;
             }
             if (!self.session) { finish(nil, @"SESSION_EXPIRED"); return; }
+            if ([action isEqual:@"verify"]) {
+                [self query:CampusOriginalPurposeProfile selection:nil code:nil completion:^(NSDictionary *evidence, NSString *error) {
+                    self.sessionVerified = evidence != nil && error == nil;
+                    finish(self.sessionVerified ? @{} : nil, error);
+                }]; return;
+            }
+            if (!self.sessionVerified) { finish(nil, @"SESSION_VERIFICATION_REQUIRED"); return; }
             if ([@[@"preview", @"pendingPayment", @"createPayment", @"paymentCheckout", @"wechatPayment", @"acknowledgePayment"] containsObject:action]) {
                 [self.payment perform:action input:input owner:self.session[@"uid"] completion:finish]; return;
-            }
-            if ([action isEqual:@"verify"]) {
-                [self query:CampusOriginalPurposeProfile selection:nil code:nil completion:^(NSDictionary *evidence, NSString *error) { finish(evidence ? @{} : nil, error); }]; return;
             }
             if ([action isEqual:@"device"]) {
                 NSString *number = CampusOriginalMachineNumber(input[@"resNo"]);
@@ -169,7 +186,8 @@ static NSString *CampusInitializationReport(NSArray *rows) {
             finish(nil, @"当前整合测试不支持此操作。");
         } @catch (NSException *exception) {
             finish(nil, [action isEqual:@"initialize"] ?
-                @"CAMPUS_INIT_FAILED\n初始化检查：发生原生异常；异常正文隐藏。" : @"洗衣客户端处理失败，请重试。");
+                @"CAMPUS_INIT_FAILED\n初始化检查：发生原生异常；异常正文隐藏。" :
+                [exception.name isEqual:@"SESSION_STORAGE_FAILED"] ? @"SESSION_STORAGE_FAILED" : @"洗衣客户端处理失败，请重试。");
         }
     });
 }

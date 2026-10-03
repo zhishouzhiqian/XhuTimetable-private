@@ -94,7 +94,18 @@ int main(void) {
         status = @"CLOSE";
         Expect(Run(engine, @"acknowledgePayment", @{}, @"owner-a"), nil);
         NSCAssert(!saved.count && clears == 2, @"关闭终态未清理");
-        puts("付款状态机测试通过：完整流程、变价、持久化前置、重复点击、超时/重启恢复、账号隔离与终态清理；未真实下单。");
+        for (NSString *field in @[@"resNo", @"businessType", @"serviceItemDTOList"]) {
+            CampusTimetablePayment *diagnostic = [[CampusTimetablePayment alloc] initWithQuery:^(CampusOriginalPurpose purpose, NSDictionary *selection, CampusPaymentCompletion done) {
+                if (purpose == CampusOriginalPurposeDeviceInfo) { done(PaymentDevice(), nil); return; }
+                NSCAssert(purpose == CampusOriginalPurposeRender, @"失败报价继续执行创建阶段");
+                NSMutableDictionary *quote = [PaymentQuote() mutableCopy]; [quote removeObjectForKey:field];
+                quote[@"privateField"] = @"private-response-value";
+                done(@{@"response": quote}, nil);
+            } load:^NSDictionary *{ return @{}; } save:^(NSDictionary *intent) { NSCAssert(NO, @"失败报价写入付款记录"); } clear:^{}];
+            NSString *error = Run(diagnostic, @"preview", preview, @"owner-a")[@"error"];
+            NSCAssert([error hasPrefix:@"CAMPUS_PAYMENT_FAILED\n报价字段核对："] && [error containsString:field] && ![error containsString:@"private-response-value"], @"报价检查点丢失或泄漏原始响应");
+        }
+        puts("付款状态机测试通过：完整流程、变价、持久化前置、重复点击、超时/重启恢复、账号隔离、终态清理与脱敏报价诊断；未真实下单。");
     }
     return 0;
 }
