@@ -25,4 +25,3 @@ xcrun --sdk iphoneos clang -fobjc-arc -fblocks -fvisibility=hidden -dynamiclib \
 xcrun nm -gU "$output/CampusOriginalProbe.dylib" > "$output/exports.txt"
 grep -q ' _CampusOriginalProbeMain$' "$output/exports.txt"
 echo '原配诊断库已生成；需在本地原 IPA 副本中打包并递归重签。'
-
