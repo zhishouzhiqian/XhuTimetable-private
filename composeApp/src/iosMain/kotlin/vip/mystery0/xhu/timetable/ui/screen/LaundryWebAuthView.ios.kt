@@ -96,6 +96,6 @@ internal actual fun LaundryServiceHost(scanImmediately: Boolean, onExit: () -> U
     } else {
         LaundryContent(state, LaundryActions({ if (!model.back()) currentExit() }, model::scan,
             model::orders, model::refresh, model::selectProgram, model::createPayment,
-            model::resumePayment, model::acknowledgePayment, model::relogin))
+            model::resumePayment, model::acknowledgePayment, model::relogin, model::dismissUnpaidPayment))
     }
 }

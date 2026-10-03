@@ -38,6 +38,7 @@ data class LaundryPayment(
 )
 data class LaundryUiState(
     val paymentAvailable: Boolean = true,
+    val localPaymentCloseAvailable: Boolean = false,
     val page: LaundryPage = LaundryPage.Loading,
     val busy: Boolean = false,
     val ordersLoading: Boolean = false,
@@ -51,6 +52,7 @@ data class LaundryUiState(
     val acknowledgedPaidOrder: LaundryPayment? = null,
     val stale: Boolean = false,
     val error: String? = null,
+    val notice: String? = null,
 )
 
 /** 页面判断只依赖已核验的数据，不根据本地计时或微信返回推断付款。 */

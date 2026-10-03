@@ -44,7 +44,8 @@ static NSString *CampusInitializationReport(NSArray *rows) {
             [client query:purpose selection:selection code:nil completion:^(NSDictionary *evidence, NSString *error) {
                 completion(evidence[@"payload"], error);
             }];
-        } load:^NSDictionary *{ return CampusPaymentLoad(); } save:^(NSDictionary *intent) { CampusPaymentSave(intent); } clear:^{ CampusPaymentClear(); }];
+        } load:^NSDictionary *{ return CampusPaymentLoad(); } save:^(NSDictionary *intent) { CampusPaymentSave(intent); }
+            clear:^{ CampusPaymentClear(); } dismiss:^(NSDictionary *intent) { CampusPaymentDismiss(intent); }];
     }
     return self;
 }
@@ -149,7 +150,7 @@ static NSString *CampusInitializationReport(NSArray *rows) {
                 }]; return;
             }
             if (!self.sessionVerified) { finish(nil, @"SESSION_VERIFICATION_REQUIRED"); return; }
-            if ([@[@"preview", @"pendingPayment", @"createPayment", @"paymentCheckout", @"wechatPayment", @"acknowledgePayment"] containsObject:action]) {
+            if ([@[@"preview", @"pendingPayment", @"createPayment", @"paymentCheckout", @"wechatPayment", @"acknowledgePayment", @"dismissUnpaidPayment"] containsObject:action]) {
                 [self.payment perform:action input:input owner:self.session[@"uid"] completion:finish]; return;
             }
             if ([action isEqual:@"device"]) {

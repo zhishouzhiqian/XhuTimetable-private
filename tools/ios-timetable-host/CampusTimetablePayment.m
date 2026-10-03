@@ -4,6 +4,7 @@
 @property(nonatomic, copy) NSDictionary *(^load)(void);
 @property(nonatomic, copy) void (^save)(NSDictionary *);
 @property(nonatomic, copy) void (^clear)(void);
+@property(nonatomic, copy) void (^dismiss)(NSDictionary *);
 @property(nonatomic, copy) NSString *owner;
 @property(nonatomic, copy) NSString *resNo;
 @property(nonatomic, copy) NSString *programKey;
@@ -12,8 +13,8 @@
 @end
 @implementation CampusTimetablePayment
 - (instancetype)initWithQuery:(CampusPaymentQuery)query load:(NSDictionary *(^)(void))load
-    save:(void (^)(NSDictionary *))save clear:(void (^)(void))clear {
-    if ((self = [super init])) { _query = [query copy]; _load = [load copy]; _save = [save copy]; _clear = [clear copy]; }
+    save:(void (^)(NSDictionary *))save clear:(void (^)(void))clear dismiss:(void (^)(NSDictionary *))dismiss {
+    if ((self = [super init])) { _query = [query copy]; _load = [load copy]; _save = [save copy]; _clear = [clear copy]; _dismiss = [dismiss copy]; }
     return self;
 }
 - (void)resetQuote { self.resNo = nil; self.programKey = nil; self.renderInput = nil; self.renderQuote = nil; }
@@ -177,6 +178,23 @@
                     completion:^(id payload, NSString *methodError) {
                         completion(payload ? @{@"uri": CampusPaymentWechat(pending, checkout, payload[@"cashierPayMethodList"])} : nil, methodError);
                     }];
+            }]; return;
+        }
+        if ([action isEqual:@"dismissUnpaidPayment"]) {
+            NSDictionary *expected = [self pending];
+            if (input.count != 1 || ![input[@"reference"] isKindOfClass:NSString.class] ||
+                ![input[@"reference"] isEqual:expected[@"isvOrderId"]]) CampusPaymentFail(@"PAYMENT_MISMATCH");
+            // 仅查询原订单。微信返回、本地超时和旧页面状态均不能作为未支付证据。
+            [self checkout:^(id payload, NSString *error) {
+                if (error) { completion(nil, error); return; }
+                NSDictionary *current = [self pending];
+                if (![current[@"isvOrderId"] isEqual:expected[@"isvOrderId"]]) CampusPaymentFail(@"PAYMENT_MISMATCH");
+                BOOL unpaid = [payload[@"status"] isEqual:@"INIT"];
+                if (unpaid) {
+                    self.dismiss(current);
+                    [self resetQuote];
+                }
+                completion(@{@"dismissed": @(unpaid)}, nil);
             }]; return;
         }
         if ([action isEqual:@"acknowledgePayment"]) {

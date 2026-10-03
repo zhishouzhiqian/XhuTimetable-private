@@ -68,6 +68,7 @@ object IosCampusClientBridge {
     val amount: String, val reference: String)
 @Serializable private data class CheckoutResult(val status: String)
 @Serializable private data class WechatResult(val uri: String)
+@Serializable private data class DismissResult(val dismissed: Boolean)
 @Serializable private data class SessionResult(val present: Boolean)
 @Serializable private data class AuthorizationResult(val url: String)
 @Serializable private data class DeviceResult(val resNo: String, val name: String, val location: String,
@@ -84,6 +85,7 @@ object IosCampusClientBridge {
 private class IosCampusLaundryClient : IosLaundryLoginGateway {
     private val json = Json
     override val supportsPayment = true
+    override val supportsLocalPaymentClose = true
     private fun payload(key: String, value: String) = buildJsonObject { put(key, value) }.toString()
     override suspend fun initialize() { IosCampusClientBridge.request("initialize") }
     override suspend fun hasSession() = json.decodeFromString<SessionResult>(IosCampusClientBridge.request("hasSession")).present
@@ -134,4 +136,6 @@ private class IosCampusLaundryClient : IosLaundryLoginGateway {
         return uri
     }
     override suspend fun acknowledgeTerminalPayment() { IosCampusClientBridge.request("acknowledgePayment") }
+    override suspend fun dismissUnpaidPayment(reference: String): Boolean =
+        json.decodeFromString<DismissResult>(IosCampusClientBridge.request("dismissUnpaidPayment", payload("reference", reference))).dismissed
 }

@@ -7,6 +7,7 @@
 NSDictionary *CampusPaymentLoad(void) { return @{}; }
 void CampusPaymentSave(NSDictionary *intent) { NSCAssert(NO, @"生命周期测试不应写付款意图"); }
 void CampusPaymentClear(void) { NSCAssert(NO, @"生命周期测试不应清付款意图"); }
+void CampusPaymentDismiss(NSDictionary *intent) { NSCAssert(NO, @"生命周期测试不应退出付款意图"); }
 static NSDictionary *savedSession;
 static BOOL storageFails, sessionExpires;
 static NSUInteger profileCalls;

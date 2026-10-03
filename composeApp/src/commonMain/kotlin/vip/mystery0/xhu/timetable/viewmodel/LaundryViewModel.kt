@@ -24,7 +24,9 @@ open class LaundryViewModel(
 ) : ViewModel(scope) {
     private val requestDispatcher = ioDispatcher
     private val mutex = Mutex()
-    private val _state = MutableStateFlow(LaundryUiState(paymentAvailable = client.supportsPayment))
+    private val paymentMutex = Mutex()
+    private val _state = MutableStateFlow(LaundryUiState(paymentAvailable = client.supportsPayment,
+        localPaymentCloseAvailable = client.supportsLocalPaymentClose))
     val state: StateFlow<LaundryUiState> = _state
     private val _command = MutableStateFlow<LaundryCommand?>(null)
     val command: StateFlow<LaundryCommand?> = _command
@@ -105,7 +107,7 @@ open class LaundryViewModel(
             return
         }
         lastResNo = resNo
-        _state.update { it.copy(page = LaundryPage.Programs, busy = true, device = null, quote = null, error = null) }
+        _state.update { it.copy(page = LaundryPage.Programs, busy = true, device = null, quote = null, error = null, notice = null) }
         viewModelScope.launch {
             try {
                 val device = request { client.lookupDevice(resNo) }
@@ -188,12 +190,11 @@ open class LaundryViewModel(
         }
     }
 
-    private suspend fun checkPayment() {
-        if (paymentCheckBusy) return
+    private suspend fun checkPayment() = paymentMutex.withLock {
         paymentCheckBusy = true
         try {
             loadPending()
-            if (_state.value.payment == null) return
+            if (_state.value.payment == null) return@withLock
             try {
                 val checkout = request { client.paymentCheckout() }
                 val status = checkout
@@ -238,7 +239,36 @@ open class LaundryViewModel(
             return
         }
         _state.update { it.copy(error = failure) }
-        if (failure == null) refresh()
+        if (failure == null) {
+            if (client.supportsLocalPaymentClose && _state.value.payment != null) dismissUnpaidPayment()
+            else refresh()
+        }
+    }
+
+    /** 只结束本地入口；原生客户端重新核验 INIT 并保存退出记录，不发送取消请求。 */
+    fun dismissUnpaidPayment() {
+        val pending = _state.value.payment ?: return
+        if (!client.supportsLocalPaymentClose || _state.value.busy || externalActive ||
+            pending.accountMismatch || pending.reference.isBlank()) return
+        _state.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch {
+            try {
+                val dismissed = paymentMutex.withLock {
+                    val closed = request { client.dismissUnpaidPayment(pending.reference) }
+                    if (closed) {
+                        guard.nextQuote()
+                        quoteJob?.cancel()
+                        _state.update { it.copy(payment = null, page = LaundryPage.Home, device = null,
+                            quote = null, selectedProgram = "", quoteLoading = false,
+                            notice = "已结束本次付款，可以继续扫码。原订单仍等待服务端自动关闭；请勿再支付原订单。") }
+                    }
+                    closed
+                }
+                if (!dismissed) checkPayment()
+                if (authenticated) refreshOrders()
+            } catch (error: Exception) { handle(error) }
+            finally { _state.update { it.copy(busy = false) } }
+        }
     }
 
     private fun enterAfterExternal(action: () -> Unit) {
@@ -389,7 +419,7 @@ open class LaundryViewModel(
             quoteJob?.cancel()
             sampledOrders = emptyList()
             _state.update { it.copy(page = LaundryPage.Loading, orders = emptyList(), history = emptyList(),
-                device = null, quote = null, payment = null, acknowledgedPaidOrder = null, error = null) }
+                device = null, quote = null, payment = null, acknowledgedPaidOrder = null, error = null, notice = null) }
             if (!externalActive) _command.value = LaundryCommand(LaundryCommandType.Login)
             return
         }

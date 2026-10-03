@@ -148,8 +148,70 @@ class LaundrySharedViewModelTest {
         assertFalse(model.state.value.error!!.contains("private-token"))
     }
 
+    @Test fun unpaidWechatReturnEndsLocalPaymentAndAllowsAnotherScan() {
+        val gateway = FakeGateway().apply { supportsLocalPaymentClose = true }
+        val model = model(gateway)
+        model.scanReturned("mock-device", null)
+        model.createPayment("4.00")
+        model.consumeCommand()
+        model.wechatReturned()
+        assertNull(model.state.value.payment)
+        assertNull(gateway.pending)
+        assertEquals(LaundryPage.Home, model.state.value.page)
+        assertEquals(1, gateway.dismissed.size)
+        assertEquals(0, gateway.acknowledgments)
+        assertEquals(1, gateway.creates)
+        assertNotNull(model.state.value.notice)
+        model.wechatReturned()
+        assertEquals(1, gateway.dismissAttempts)
+        model.scan()
+        assertEquals(LaundryCommandType.Scan, model.command.value?.type)
+    }
+
+    @Test fun localCloseKeepsPayingUnknownAndFailedStorageBlocked() {
+        for (status in listOf(LaundryPaymentStatus.Paying, LaundryPaymentStatus.Unknown, LaundryPaymentStatus.Success)) {
+            val gateway = FakeGateway().apply { supportsLocalPaymentClose = true; pending = payment(); checkout = status }
+            val model = model(gateway)
+            model.wechatReturned()
+            assertNotNull(gateway.pending)
+            assertNotNull(model.state.value.payment)
+            assertTrue(gateway.dismissed.isEmpty())
+            model.scan()
+            assertNull(model.command.value)
+        }
+        val gateway = FakeGateway().apply { supportsLocalPaymentClose = true; pending = payment(); dismissFails = true }
+        val model = model(gateway)
+        model.wechatReturned()
+        assertNotNull(gateway.pending)
+        assertNotNull(model.state.value.payment)
+        assertTrue(gateway.dismissed.isEmpty())
+        assertNotNull(model.state.value.error)
+        assertFalse(model.state.value.busy)
+    }
+
+    @Test fun localCloseAfterRestartUsesNewCheckAndSerializesWithRefresh() {
+        val gateway = FakeGateway().apply { supportsLocalPaymentClose = true; pending = payment() }
+        val model = model(gateway)
+        val release = CompletableDeferred<Unit>()
+        gateway.checkoutPause = { release.await() }
+        model.refresh()
+        model.dismissUnpaidPayment()
+        model.dismissUnpaidPayment()
+        assertTrue(model.state.value.busy)
+        assertNotNull(gateway.pending)
+        assertEquals(0, gateway.dismissAttempts)
+        release.complete(Unit)
+        assertNull(gateway.pending)
+        assertNull(model.state.value.payment)
+        assertFalse(model.state.value.busy)
+        assertEquals(1, gateway.dismissed.size)
+        model.refresh()
+        assertNull(model.state.value.payment)
+    }
+
     private class FakeGateway : LaundryGateway {
         override var supportsPayment = true
+        override var supportsLocalPaymentClose = false
         var session = true
         var pending: LaundryPayment? = null
         var checkout = LaundryPaymentStatus.Unpaid
@@ -158,6 +220,10 @@ class LaundrySharedViewModelTest {
         var ordersFail = false
         var creates = 0
         var acknowledgments = 0
+        var dismissAttempts = 0
+        var dismissFails = false
+        var checkoutPause: suspend () -> Unit = {}
+        val dismissed = mutableListOf<LaundryPayment>()
         val quoted = mutableListOf<String>()
         val samples = mutableListOf<Boolean>()
         var initializationError: Exception? = null
@@ -179,6 +245,7 @@ class LaundrySharedViewModelTest {
             if (uncertain) error("CREATE_UNCERTAIN")
         }
         override suspend fun paymentCheckout(): LaundryPaymentStatus {
+            checkoutPause()
             if (uncertain) error("CREATE_UNCERTAIN")
             return checkout
         }
@@ -187,6 +254,18 @@ class LaundrySharedViewModelTest {
             check(paymentCheckout() in listOf(LaundryPaymentStatus.Success, LaundryPaymentStatus.Closed))
             acknowledgments++
             pending = null
+        }
+        override suspend fun dismissUnpaidPayment(reference: String): Boolean {
+            dismissAttempts++
+            val current = checkNotNull(pending)
+            check(current.reference == reference)
+            val status = paymentCheckout()
+            if (status == LaundryPaymentStatus.Unknown) error("PAYMENT_MISMATCH")
+            if (status != LaundryPaymentStatus.Unpaid) return false
+            if (dismissFails) error("PAYMENT_STORAGE_FAILED")
+            dismissed += current
+            pending = null
+            return true
         }
         override suspend fun runningOrders(useVerified: Boolean): LaundryOrderSnapshot {
             checkSession()

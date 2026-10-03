@@ -17,6 +17,10 @@ xcrun --sdk macosx clang -fobjc-arc -fblocks \
   tools/ios-timetable-host/CampusTimetablePaymentProtocol.m tools/ios-timetable-host/CampusTimetableClientTests.m \
   -framework Foundation -framework CoreFoundation -o "$output/client-tests"
 "$output/client-tests"
+xcrun --sdk macosx clang -fobjc-arc -fblocks \
+  tools/ios-timetable-host/CampusTimetablePaymentStore.m tools/ios-timetable-host/CampusTimetablePaymentStoreTests.m \
+  -framework Foundation -framework CoreFoundation -framework Security -o "$output/payment-store-tests"
+"$output/payment-store-tests"
 # 付款测试使用固定桩及内存存储；不下单、不访问厂商组件或本人 Keychain。
 for suite in CampusTimetablePaymentProtocolTests CampusTimetablePaymentTests; do
   xcrun --sdk macosx clang -fobjc-arc -fblocks -DCAMPUS_TIMETABLE_HOST=1 -DCAMPUS_ORIGINAL_PROBE_TEST=1 \

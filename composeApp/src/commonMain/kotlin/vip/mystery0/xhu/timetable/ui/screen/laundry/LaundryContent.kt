@@ -36,6 +36,7 @@ data class LaundryActions(
     val resumePayment: () -> Unit,
     val acknowledgePayment: () -> Unit,
     val relogin: () -> Unit = {},
+    val dismissUnpaidPayment: () -> Unit = {},
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -84,6 +85,8 @@ fun LaundryContent(state: LaundryUiState, actions: LaundryActions) {
                     }
                 }
             }
+            state.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant) }
             if (!state.paymentAvailable) Text("整合测试：支持登录、扫码与订单查询，暂未开放下单付款。",
                 style = MaterialTheme.typography.bodySmall)
             when (state.page) {
@@ -140,7 +143,7 @@ private fun ColumnScope.HomeContent(state: LaundryUiState, actions: LaundryActio
                     TextButton(onClick = actions.acknowledgePayment, enabled = !state.busy) { Text("知道了") }
                 }
             }
-        } else PaymentCard(payment, state.busy, actions)
+        } else PaymentCard(payment, state.busy, actions, state.localPaymentCloseAvailable)
     }
     val running = state.orders.filter { it.running }
     val waiting = state.orders.filter { it.waitingForDevice }
@@ -295,13 +298,13 @@ private fun PaymentBar(state: LaundryUiState, confirm: () -> Unit) {
 
 @Composable
 private fun ColumnScope.PaymentContent(state: LaundryUiState, actions: LaundryActions) {
-    state.payment?.let { PaymentCard(it, state.busy, actions) }
+    state.payment?.let { PaymentCard(it, state.busy, actions, state.localPaymentCloseAvailable) }
     if (state.payment == null) Text("没有未完成的付款。")
     if (state.busy) CircularProgressIndicator(Modifier.align(Alignment.CenterHorizontally))
 }
 
 @Composable
-private fun PaymentCard(payment: LaundryPayment, busy: Boolean, actions: LaundryActions) {
+private fun PaymentCard(payment: LaundryPayment, busy: Boolean, actions: LaundryActions, localClose: Boolean) {
     OutlinedCard(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)),
         colors = CardDefaults.outlinedCardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow)) {
@@ -329,10 +332,16 @@ private fun PaymentCard(payment: LaundryPayment, busy: Boolean, actions: Laundry
                 } else when (payment.status) {
                     LaundryPaymentStatus.Success, LaundryPaymentStatus.Closed ->
                         TextButton(onClick = actions.acknowledgePayment, enabled = !busy) { Text("知道了") }
-                    LaundryPaymentStatus.Unpaid ->
+                    LaundryPaymentStatus.Unpaid -> {
+                        if (localClose) TextButton(onClick = actions.dismissUnpaidPayment, enabled = !busy) { Text("结束本次付款") }
                         Button(onClick = actions.resumePayment, enabled = !busy) { Text("继续微信付款") }
+                    }
                     else -> OutlinedButton(onClick = actions.refresh, enabled = !busy) { Text("核验付款结果") }
                 }
+            }
+            if (localClose && payment.status == LaundryPaymentStatus.Unpaid && !payment.accountMismatch) {
+                Text("结束付款后可继续扫码；原订单仍由服务端自动关闭。", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
     }
@@ -344,7 +353,7 @@ private fun OrdersContent(state: LaundryUiState, actions: LaundryActions) {
         it.reference.isBlank() || it.reference != state.payment.reference }
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         SectionHeading("待处理", pending.size + if (state.payment != null) 1 else 0, "付款核验与当前洗衣状态")
-        state.payment?.let { PaymentCard(it, state.busy, actions) }
+        state.payment?.let { PaymentCard(it, state.busy, actions, state.localPaymentCloseAvailable) }
         if (pending.isEmpty() && state.payment == null) EmptyOrderSection(if (state.ordersLoading) "正在加载订单…" else "暂无待处理订单")
         pending.forEach { if (it.running || it.waitingForDevice) ActiveOrderCard(it, state.stale) else OrderGroup(listOf(it)) }
     }
