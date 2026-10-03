@@ -3,6 +3,8 @@
 #import <objc/message.h>
 #import <objc/runtime.h>
 #include <string.h>
+#include <stdlib.h>
+#import "../../iosApp/iosApp/CampusMtopProbeInput.h"
 
 #ifndef CAMPUS_ORIGINAL_PROBE_TEST
 #import <UIKit/UIKit.h>
@@ -42,7 +44,7 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
         [rows addObject:@{@"step": step, @"result": result}];
         if (progress) progress([rows copy]);
     };
-    emit(@"诊断方式", @"原程序内组件；默认资源入口；只进行本地初始化，不调用业务接口");
+    emit(@"诊断方式", @"原程序内组件；默认资源入口；本地初始化及两次离线签名，不发送请求");
     @try {
         BOOL resourcesValid = [manifest isKindOfClass:NSDictionary.class] &&
             [manifest[@"version"] isEqual:@1] &&
@@ -82,9 +84,11 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
         emit(@"静态存储组件", store ? @"可获取" : @"入口不匹配或返回空值");
         // 原校园先初始化内部管理器并读取包装器；包装器自行转发 Open、authCode:nil。
         SEL getKey = NSSelectorFromString(@"getAppKey:");
+        NSString *appKey = nil;
         if (ProbeMethod(store, getKey, @[@"@"], NO)) {
             id value = ((id (*)(id, SEL, id))objc_msgSend)(store, getKey, @0);
             BOOL valid = [value isKindOfClass:NSString.class] && [value length] > 0;
+            if (valid) appKey = value;
             emit(@"AppKey 索引 0", valid ? @"读取成功（值不展示）" :
                 @"空值；接口无 NSError；本诊断未捕获底层日志错误码");
         } else emit(@"AppKey 索引 0", @"方法类型不匹配；未调用");
@@ -98,18 +102,59 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
             ((id (*)(id, SEL, id))objc_msgSend)(openManager, getInterface, protocol) : nil;
         emit(@"统一签名接口", unified ? @"可获取" : @"协议、入口不匹配或返回空值");
         SEL initialize = NSSelectorFromString(@"init:error:");
+        BOOL initialized = NO;
         if (ProbeMethod(unified, initialize, @[@"@", @"^@"], YES)) {
             NSError *error = nil;
             // 6.8 已核对读取 authCode/flag/customBundelPath；空字典保留默认 nil/nil/0。
             // 不复制调用层未被消费的 auth_code，也不更换原应用资源目录。
             BOOL ready = ((BOOL (*)(id, SEL, id, NSError *__autoreleasing *))objc_msgSend)(unified, initialize, @{}, &error);
+            initialized = ready && error == nil;
             emit(@"统一签名初始化", ready && error == nil ? @"成功" : error ?
                 [NSString stringWithFormat:@"失败（SDK 错误码 %ld）", (long)error.code] : @"失败；未提供错误码");
         } else emit(@"统一签名初始化", @"方法类型不匹配；未调用");
+        SEL factorsSelector = NSSelectorFromString(@"getSecurityFactors:error:");
+        if (!initialized || !appKey.length) {
+            emit(@"离线签名", @"跳过：初始化未成功或 AppKey 为空");
+        } else if (!ProbeMethod(unified, factorsSelector, @[@"@", @"^@"], NO)) {
+            emit(@"离线签名", @"方法类型不匹配；未调用");
+        } else {
+            unsigned char randomBytes[18];
+            arc4random_buf(randomBytes, sizeof(randomBytes));
+            NSString *utdid = [[NSData dataWithBytes:randomBytes length:sizeof(randomBytes)] base64EncodedStringWithOptions:0];
+            NSString *timestamp = [NSString stringWithFormat:@"%.0f", NSDate.date.timeIntervalSince1970];
+            NSString *previous = nil;
+            emit(@"签名输入", @"iOS MTOP 22 字段；秒级时间与正文 MD5；临时随机标识未注册；第二次仅改变正文及请求编号");
+            for (NSUInteger attempt = 0; attempt < 2; attempt++) {
+                NSString *stage = attempt == 0 ? @"第一次离线签名" : @"改变正文后离线签名";
+                emit(stage, @"正在执行");
+                NSData *body = [NSJSONSerialization dataWithJSONObject:
+                    @{@"device_global_id": utdid, @"probe_nonce": @(attempt)} options:0 error:nil];
+                NSString *input = CampusMtopProbeSignData(body, utdid, appKey, @"mtop.sys.newdeviceid", @"4.0",
+                    @{@"x-t": timestamp, @"x-ttid": @"campus-ios-original-probe"});
+                if (!input) { emit(stage, @"输入组装失败；未调用"); break; }
+                NSError *error = nil;
+                id result = ((id (*)(id, SEL, id, NSError *__autoreleasing *))objc_msgSend)(unified, factorsSelector,
+                    @{@"appkey": appKey, @"data": input, @"api": @"mtop.sys.newdeviceid", @"useWua": @NO,
+                      @"env": @0, @"extendParas": @{}, @"requestId": NSUUID.UUID.UUIDString}, &error);
+                BOOL complete = CampusMtopProbeFactorsComplete(result, error);
+                emit(stage, complete ? @"必需字段完整（值不展示）；仅证明本地生成" : error ?
+                    [NSString stringWithFormat:@"失败（SDK 错误码 %ld）", (long)error.code] : @"必需字段不完整；不能判定签名成功");
+                NSDictionary *factors = [result isKindOfClass:NSDictionary.class] ? result : nil;
+                for (NSString *key in @[@"x-sign", @"x-mini-wua", @"x-umt", @"x-sgext"]) {
+                    id value = factors[key];
+                    emit([stage stringByAppendingFormat:@" / %@", key],
+                        [value isKindOfClass:NSString.class] && [value length] > 0 ? @"已生成（值不展示）" : @"为空或类型不符");
+                }
+                NSString *sign = complete ? factors[@"x-sign"] : nil;
+                if (attempt == 0) previous = sign;
+                else emit(@"签名输入变化对照", previous.length && sign.length ?
+                    ([previous isEqualToString:sign] ? @"相同，需继续分析" : @"不同，已随输入变化") : @"缺少完整签名，无法比较");
+            }
+        }
     } @catch (NSException *exception) {
         emit(@"本地检查", @"发生异常（正文不展示）");
     }
-    emit(@"验证边界", @"未生成签名、未验证服务器、未登录或下单；原二进制加载期活动不在诊断控制范围内");
+    emit(@"验证边界", @"仅离线生成诊断安全字段；未发送请求、未验证服务器、未登录或下单；原二进制加载期活动不在诊断控制范围内");
     return [rows copy];
 }
 
@@ -143,7 +188,7 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
     self.report = [[UITextView alloc] init];
     self.report.editable = NO;
     self.report.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.report.text = @"请先开启飞行模式，并关闭 Wi-Fi，再开始。\n\n诊断版本：1\n当前运行专用 Application/AppDelegate\n本检查只调用原配组件的本地初始化接口。\n原二进制的类加载代码仍可能执行。\n\n每次新进程只执行一次。";
+    self.report.text = @"请先开启飞行模式，并关闭 Wi-Fi，再开始。\n\n诊断版本：2\n当前运行专用 Application/AppDelegate\n本检查调用原配组件本地初始化及离线签名接口，不发送请求。\n原二进制的类加载代码仍可能执行。\n\n每次新进程只执行一次。";
     [stack addArrangedSubview:self.report];
     self.start = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.start setTitle:@"开始本地检查" forState:UIControlStateNormal];
@@ -162,7 +207,7 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：1\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：2\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
