@@ -24,6 +24,8 @@ typedef NS_OPTIONS(NSUInteger, CampusProbeTraceOptions) {
     CampusProbeTraceOptionsAllowMissingReference = 1 << 1,
     /// 观察 access/stat/lstat/opendir、lseek/fstat 与部分 Foundation 文件方法。
     CampusProbeTraceOptionsHostChannels = 1 << 2,
+    /// 单独观察 NSData writeToFile:atomically:，不混入既有读通道计数。
+    CampusProbeTraceOptionsWriteEvents = 1 << 3,
 };
 
 /// 与首版等价：options 为 CampusProbeTraceOptionsTargetsOnly。

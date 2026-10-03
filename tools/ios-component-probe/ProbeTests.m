@@ -371,6 +371,68 @@ static void CheckFdTraceIdentity(void) {
     [[NSFileManager defaultManager] removeItemAtPath:outside error:nil];
 }
 
+static void CheckWriteEventTrace(void) {
+    NSString *path = [folder stringByAppendingPathComponent:@"private-write-event"];
+    NSString *missing = [[folder stringByAppendingPathComponent:@"private-missing-parent"]
+        stringByAppendingPathComponent:@"private-write-event"];
+    NSData *input = [@"private-write-content" dataUsingEncoding:NSUTF8StringEncoding];
+    CampusProbeResourceTraceSuspendCurrentThread();
+    errno = EDOM;
+    BOOL baselineFailure = [input writeToFile:missing atomically:YES];
+    int baselineWriteError = errno;
+    CampusProbeResourceTraceResumeCurrentThread();
+    CampusProbeTraceOptions options = CampusProbeTraceOptionsWriteEvents;
+    Check(CampusProbeResourceTraceBeginWithOptions(folder, options), @"写入自检窗口应有效");
+    NSArray *empty = CampusProbeResourceTraceEnd();
+    NSString *status = ReportResult(empty, @"写入通道：NSData.writeToFile:atomically:");
+    Check([status containsString:@"尝试 0；成功 0；失败 0；事件记录 0"], @"写入自检必须清零，不得冒充 SDK 写入");
+    BOOL observed = [status hasPrefix:@"自检命中"];
+
+    Check(CampusProbeResourceTraceBeginWithOptions(folder, options), @"写入观察窗口应有效");
+    CampusProbeResourceTraceMark(@"写入测试");
+    Check([input writeToFile:path atomically:YES], @"正常写入结果应保留");
+    errno = EDOM;
+    BOOL failure = [input writeToFile:missing atomically:YES];
+    int observedWriteError = errno;
+    Check(!failure && failure == baselineFailure && observedWriteError == baselineWriteError,
+        @"写入观察不得改变失败结果及 errno");
+    CampusProbeResourceTraceSuspendCurrentThread();
+    @try {
+        Check([input writeToFile:path atomically:YES], @"暂停观察不应影响写入");
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+            Check([input writeToFile:path atomically:YES], @"工作线程写入应成功");
+            dispatch_semaphore_signal(done);
+        });
+        Check(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) == 0,
+            @"暂停当前线程时其它线程的写入应能完成");
+    } @finally { CampusProbeResourceTraceResumeCurrentThread(); }
+    NSArray *rows = CampusProbeResourceTraceEnd();
+    status = ReportResult(rows, @"写入通道：NSData.writeToFile:atomically:");
+    if (observed) {
+        Check([status containsString:@"尝试 3；成功 2；失败 1；事件记录 3"],
+            @"写入观察应独立统计成功、失败及工作线程，并排除暂停线程");
+        Check([ReportResult(rows, @"写入事件：1") containsString:@"写入测试"], @"写入事件应关联阶段边界");
+    }
+    CheckReportResult(rows, @"SDK 文件入口：yw_1222.jpg", @"fopen 0，open 0；包含工作线程，不包含自检");
+    CheckReportResult(rows, @"SDK 文件入口：yw_1222_mwua.jpg", @"fopen 0，open 0；包含工作线程，不包含自检");
+    for (NSDictionary *row in rows) {
+        NSString *text = [row[@"step"] stringByAppendingString:row[@"result"]];
+        Check(![text containsString:folder] && ![text containsString:@"private-"] &&
+            ![text containsString:@"probe-write-canary-"], @"写入报告不得泄露路径、文件名或输入内容");
+    }
+
+    Check(CampusProbeResourceTraceBeginWithOptions(folder, options), @"写入上限窗口应有效");
+    for (int i = 0; i < 50; i++) Check([input writeToFile:path atomically:NO], @"重复写入应成功");
+    status = ReportResult(CampusProbeResourceTraceEnd(), @"写入通道：NSData.writeToFile:atomically:");
+    if (observed) {
+        Check([status containsString:@"尝试 50；成功 50；失败 0；事件记录 48；达到记录上限"],
+            @"写事件记录必须有界，溢出后仍统计调用总数");
+    }
+    [[NSFileManager defaultManager] removeItemAtPath:path error:nil];
+    Check(CampusProbeResourceTraceEnd().count == 0, @"写窗口结束后不得返回旧事件");
+}
+
 static void CheckHostChannelTrace(void) {
     NSString *main = [folder stringByAppendingPathComponent:@"yw_1222.jpg"];
     // 目录外文件在窗口开启前创建、结束后删除，避免原子写入的内部
@@ -757,6 +819,7 @@ int main(void) {
         CheckDiagnosticTrace();
         CheckHostChannelTrace();
         CheckFdTraceIdentity();
+        CheckWriteEventTrace();
         dispatch_async(dispatch_get_main_queue(), ^{ RunCase(0); });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ Check(NO, @"原生测试超时"); });
         dispatch_main();

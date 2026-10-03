@@ -11,6 +11,10 @@ NS_ASSUME_NONNULL_BEGIN
 /// 内部清单：相对路径 -> "size:hash"，另有扫描状态。不得直接复制到报告。
 + (NSDictionary<NSString *, NSString *> *)capture;
 
+/// 本进程匿名标签；传入相同沙盒相对路径时可关联写事件与扫描差集。
+/// 不是跨进程标识，不得将传入路径直接写入报告。
++ (NSString *)tagForPath:(NSString *)path;
+
 /// 与 before 比较，报告新增、变化、未再次采集到及扫描范围。
 + (NSArray<NSDictionary<NSString *, NSString *> *> *)diffSince:(NSDictionary<NSString *, NSString *> *)before
                                                         label:(NSString *)label;

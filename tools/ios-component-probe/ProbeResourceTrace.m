@@ -1,4 +1,5 @@
 #import "ProbeResourceTrace.h"
+#import "ProbeContainerSnapshot.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <objc/runtime.h>
 #include <dirent.h>   // DIR / opendir / closedir：宿主通道的目录枚举拦截与自检
@@ -7,6 +8,7 @@
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -109,7 +111,7 @@ static const char *ProbeHostChannelNames[ProbeHostChannelCount] = {
 static const char *ProbeNames[] = {"yw_1222.jpg", "yw_1222_mwua.jpg"};
 static char ProbeCanaryPath[1024];
 static ProbeFileObservation ProbeCanary;
-static BOOL ProbeTraceActive;
+static _Atomic(BOOL) ProbeTraceActive;
 static CampusProbeTraceOptions ProbeTraceOptions;
 static ProbeFileObservation ProbeFiles[2];
 static ProbeScopedFile ProbeScopedFiles[ProbeScopedFileLimit];
@@ -123,6 +125,15 @@ static char ProbeScopeRootResolved[1024];
 static size_t ProbeScopeRootResolvedLength;
 static ProbeHostRecord ProbeHost[ProbeHostChannelCount];
 static ProbeOutsideRecord ProbeOutside;
+// 写事件与读通道正交；只记录输入长度和匿名标签，不读取或输出写入内容。
+static unsigned int ProbeWriteAttempts, ProbeWriteSuccesses;
+static BOOL ProbeWriteSelfChecked;
+static NSMutableArray<NSDictionary<NSString *, NSString *> *> *ProbeWriteEvents;
+static NSString *ProbeWriteHomePrefix;
+static NSString *ProbeWriteCanaryPath;
+static unsigned int ProbeWriteCanaryHits, ProbeWriteCanarySuccesses;
+static BOOL (*ProbeOriginalNSDataWriteToFile)(id, SEL, NSString *, BOOL);
+enum { ProbeWriteEventLimit = 48 };
 // app bundle 路径前缀在 Begin 时缓存为 C 字符串，避免在锁内、热路径上反复调
 // NSBundle.mainBundle.bundlePath（stat 一轮命中 150 次）。
 static char ProbeAppBundlePrefix[1024];
@@ -626,6 +637,56 @@ int fstat(int fd, struct stat *sb) {
 
 #pragma mark - Foundation 读方法拦截
 
+static BOOL ProbeNSDataWriteToFile(id self, SEL selector, NSString *path, BOOL atomic) {
+    // 抑制原方法内部的读探测及其它嵌套调用；异常时也必须恢复深度。
+    BOOL result;
+    int before = errno;
+    NSUInteger inputLength = [(NSData *)self length];
+    errno = before;
+    ProbeHostDepth++;
+    @try { result = ProbeOriginalNSDataWriteToFile(self, selector, path, atomic); }
+    @finally { ProbeHostDepth--; }
+    int after = errno;
+    if (ProbeInternalReadDepth > 0 || ProbeHostDepth > 0 || !ProbeTraceActive) return result;
+    ProbeHostDepth++;
+    pthread_mutex_lock(&ProbeTraceMutex);
+    @try {
+        if (!ProbeTraceActive || !(ProbeTraceOptions & CampusProbeTraceOptionsWriteEvents)) return result;
+        ProbeWriteAttempts++;
+        if (result) ProbeWriteSuccesses++;
+        if (ProbeWriteCanaryPath && [path isEqualToString:ProbeWriteCanaryPath]) {
+            ProbeWriteCanaryHits++;
+            if (result) ProbeWriteCanarySuccesses++;
+        }
+        if (ProbeWriteEvents.count < ProbeWriteEventLimit) {
+            NSString *stage = ProbeStageMarkCount ?
+                [NSString stringWithUTF8String:ProbeStageMarks[ProbeStageMarkCount - 1].stage] : @"未标记";
+            NSString *resolved = [path stringByResolvingSymlinksInPath];
+            NSString *tag = @"无法与沙盒扫描关联";
+            NSString *category = @"沙盒外或路径不可归类";
+            if (ProbeWriteHomePrefix.length && [resolved hasPrefix:ProbeWriteHomePrefix]) {
+                NSString *relative = [resolved substringFromIndex:ProbeWriteHomePrefix.length];
+                if (relative.length) {
+                    tag = [CampusProbeContainerSnapshot tagForPath:relative];
+                    category = @"沙盒内";
+                }
+            }
+            BOOL inScope = ProbePathInScope(path.fileSystemRepresentation);
+            [ProbeWriteEvents addObject:@{@"step": [NSString stringWithFormat:@"写入事件：%u", ProbeWriteAttempts],
+                @"result": [NSString stringWithFormat:
+                    @"位于阶段边界“%@”之后；%@；%@；%@；输入长度 %lu 字节；%@",
+                    stage ?: @"未标记", result ? @"成功" : @"失败",
+                    inScope ? @"对照目录内" : @"对照目录外", category,
+                    (unsigned long)inputLength, tag]}];
+        }
+    } @finally {
+        pthread_mutex_unlock(&ProbeTraceMutex);
+        ProbeHostDepth--;
+        errno = after;
+    }
+    return result;
+}
+
 static id (*ProbeOriginalNSDataWithContentsOfFile)(id, SEL, NSString *);
 static id (*ProbeOriginalNSDataWithContentsOfFileOptionsError)(id, SEL, NSString *, NSDataReadingOptions, NSError **);
 static id (*ProbeOriginalNSDataWithContentsOfURL)(id, SEL, id);
@@ -959,6 +1020,17 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
     pthread_mutex_lock(&ProbeTraceMutex);
     ProbeTraceActive = NO;
     ProbeTraceOptions = options;
+    ProbeInternalReadDepth++;
+    @try {
+        ProbeWriteAttempts = ProbeWriteSuccesses = 0;
+        ProbeWriteSelfChecked = NO;
+        ProbeWriteCanaryPath = nil;
+        ProbeWriteCanaryHits = ProbeWriteCanarySuccesses = 0;
+        BOOL writes = (options & CampusProbeTraceOptionsWriteEvents) != 0;
+        ProbeWriteEvents = writes ? [NSMutableArray array] : nil;
+        NSString *home = writes ? [NSHomeDirectory() stringByResolvingSymlinksInPath] : nil;
+        ProbeWriteHomePrefix = home.length ? [home stringByAppendingString:@"/"] : nil;
+    } @finally { ProbeInternalReadDepth--; }
     memset(ProbeFiles, 0, sizeof(ProbeFiles));
     memset(ProbeScopedFiles, 0, sizeof(ProbeScopedFiles));
     ProbeScopedFileCount = 0;
@@ -988,6 +1060,16 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
     pthread_once(&ProbeResolveOnce, ProbeResolveFopen);
     if (!ProbeOriginalFopen || !ProbeOriginalOpen) return NO;
     BOOL hostChannels = (options & CampusProbeTraceOptionsHostChannels) != 0;
+    BOOL writeEvents = (options & CampusProbeTraceOptionsWriteEvents) != 0;
+    if (writeEvents) {
+        static dispatch_once_t writer;
+        static BOOL writerInstalled;
+        dispatch_once(&writer, ^{
+            writerInstalled = ProbeInstallInterceptor(NSData.class, @selector(writeToFile:atomically:),
+                (IMP)ProbeNSDataWriteToFile, (IMP *)&ProbeOriginalNSDataWriteToFile);
+        });
+        if (!writerInstalled) return NO;
+    }
     if (hostChannels) {
         if (!ProbeOriginalAccess || !ProbeOriginalOpendir || !ProbeOriginalStat ||
             !ProbeOriginalLstat || !ProbeOriginalLseek || !ProbeOriginalFstat) return NO;
@@ -1127,6 +1209,19 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
         DIR *probeDirectory = opendir(directory.fileSystemRepresentation);
         if (probeDirectory) closedir(probeDirectory);
     }
+    // 写入自检使用独立文件，不覆盖参考图片。随后与读自检一起清零。
+    if (writeEvents) {
+        NSString *writeCanary = [directory stringByAppendingPathComponent:
+            [@"probe-write-canary-" stringByAppendingString:NSUUID.UUID.UUIDString]];
+        NSData *input = [@"probe-write" dataUsingEncoding:NSUTF8StringEncoding];
+        pthread_mutex_lock(&ProbeTraceMutex);
+        ProbeWriteCanaryPath = writeCanary;
+        pthread_mutex_unlock(&ProbeTraceMutex);
+        [input writeToFile:writeCanary atomically:YES];
+        CampusProbeResourceTraceSuspendCurrentThread();
+        @try { [[NSFileManager defaultManager] removeItemAtPath:writeCanary error:nil]; }
+        @finally { CampusProbeResourceTraceResumeCurrentThread(); }
+    }
     pthread_mutex_lock(&ProbeTraceMutex);
     BOOL valid = !needCanary || (ProbeCanary.fopenCalls == 1 && ProbeCanary.openCalls == 1 &&
         ProbeCanary.sameFile == 2 && ProbeCanary.sameContent == 2);
@@ -1148,6 +1243,11 @@ BOOL CampusProbeResourceTraceBeginWithOptions(NSString *directory, CampusProbeTr
         }
     }
     memcpy(ProbeFiles, references, sizeof(ProbeFiles));
+    ProbeWriteSelfChecked = writeEvents && ProbeWriteCanaryHits == 1 && ProbeWriteCanarySuccesses == 1;
+    ProbeWriteCanaryPath = nil;
+    ProbeWriteCanaryHits = ProbeWriteCanarySuccesses = 0;
+    ProbeWriteAttempts = ProbeWriteSuccesses = 0;
+    [ProbeWriteEvents removeAllObjects];
     memset(ProbeScopedFiles, 0, sizeof(ProbeScopedFiles));
     ProbeScopedFileCount = 0;
     ProbeScopedOverflow = NO;
@@ -1200,6 +1300,15 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
         ProbeHostTotalsLocked(&last->hostTarget, &last->hostScoped, &last->hostOutside);
     }
     ProbeTraceActive = NO;
+    unsigned int writeAttempts = ProbeWriteAttempts, writeSuccesses = ProbeWriteSuccesses;
+    BOOL writeChecked = ProbeWriteSelfChecked;
+    NSArray *writeRows = [ProbeWriteEvents copy];
+    ProbeWriteAttempts = ProbeWriteSuccesses = 0;
+    ProbeWriteSelfChecked = NO;
+    ProbeWriteEvents = nil;
+    ProbeWriteHomePrefix = nil;
+    ProbeWriteCanaryPath = nil;
+    ProbeWriteCanaryHits = ProbeWriteCanarySuccesses = 0;
     ProbeFileObservation snapshot[2];
     memcpy(snapshot, ProbeFiles, sizeof(snapshot));
     ProbeScopedFile scoped[ProbeScopedFileLimit];
@@ -1224,6 +1333,16 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusProbeResourceTraceEnd(voi
     pthread_mutex_unlock(&ProbeTraceMutex);
     if (!wasActive) return @[];
     NSMutableArray<NSDictionary<NSString *, NSString *> *> *rows = [NSMutableArray array];
+    if (options & CampusProbeTraceOptionsWriteEvents) {
+        [rows addObject:@{@"step": @"写入通道：NSData.writeToFile:atomically:",
+            @"result": [NSString stringWithFormat:@"%@；尝试 %u；成功 %u；失败 %u；事件记录 %lu；%@",
+                writeChecked ? @"自检命中" : @"自检未命中（本通道结果不可信）",
+                writeAttempts, writeSuccesses, writeAttempts - writeSuccesses,
+                (unsigned long)writeRows.count, writeAttempts > writeRows.count ? @"达到记录上限" : @"未达到记录上限"]}];
+        [rows addObjectsFromArray:writeRows];
+        [rows addObject:@{@"step": @"写入观察边界",
+            @"result": @"仅覆盖该 NSData 方法，每窗口最多 48 条事件；输入长度不是实际写入流量；匿名标签只在本进程关联；调用与文件变化均不能单独认定写入者为 SDK，零命中不排除其它写入入口"}];
+    }
     for (int i = 0; i < 2; i++) {
         [rows addObject:@{@"step": [@"SDK 文件访问：" stringByAppendingString:[NSString stringWithUTF8String:ProbeNames[i]]],
             @"result": ProbeObservationText(&snapshot[i])}];

@@ -370,6 +370,7 @@ def main():
     check_report_hygiene()
     check_brace_balance()
     check_fd_accounting()
+    check_write_observation()
     if failures:
         print("接线检查未通过（{} 项）：".format(len(failures)))
         for item in failures:
@@ -377,6 +378,28 @@ def main():
         return 1
     print("静态接线检查通过；不代表 Objective-C/Swift 编译、原生测试或完整报告脱敏验证通过。")
     return 0
+
+
+def check_write_observation():
+    """写入观察只允许进入诊断模式，并需自检、限额和原生测试接线。"""
+    header = read(TOOLS / "ProbeResourceTrace.h")
+    implementation = read(TOOLS / "ProbeResourceTrace.m")
+    probe = read(APP / "CampusComponentProbe.m")
+    tests = read(TOOLS / "ProbeTests.m")
+    for text, marker in [(header, "CampusProbeTraceOptionsWriteEvents"),
+                         (probe, "CampusProbeTraceOptionsWriteEvents"),
+                         (implementation, "ProbeWriteSelfChecked = writeEvents && ProbeWriteCanaryHits == 1 && ProbeWriteCanarySuccesses == 1"),
+                         (implementation, "ProbeWriteEvents.count < ProbeWriteEventLimit"),
+                         (implementation, "@selector(writeToFile:atomically:)"),
+                         (implementation, "[CampusProbeContainerSnapshot tagForPath:relative]"),
+                         (tests, "CheckWriteEventTrace();"),
+                         (tests, "事件记录 48；达到记录上限")]:
+        if marker not in text:
+            fail("写入观察缺少接线或约束：{}".format(marker))
+    if implementation.count("ProbeWriteAttempts = ProbeWriteSuccesses = 0;") < 3:
+        fail("写入计数必须在开始、自检后和结束时清零")
+    if not re.search(r"\bProbeWriteEventLimit\s*=\s*48\s*[},;]", implementation):
+        fail("写入事件记录上限必须为 48")
 
 
 def check_fd_accounting():

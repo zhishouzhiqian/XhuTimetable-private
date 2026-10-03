@@ -270,25 +270,18 @@ static NSDictionary<NSString *, id> *CampusProbeDiagnosticPrepare(NSString *sour
 #if CAMPUS_COMPONENT_TRACE_FILES
                 CampusProbeTraceOptions traceOptions = CampusProbeTraceOptionsTargetsOnly;
                 if (diagnostics) {
-                    // 宿主通道是诊断模式的额外观察面。静态取证已证明：候选 SGMain 的
-                    // AVMP/uvm 宿主函数表里只有 access/lseek/fstat/lstat/opendir/readdir，
-                    // 没有 fopen/open/read，因此字节码要读内容只能经 objc_msgSend 调
-                    // Foundation；只统计 fopen/open 必然零命中。
-                    // 上一轮真机运行已证伪“只覆盖类方法就够”：access/opendir 有命中、
-                    // Foundation 类方法有调用，但两张图的目标命中为 0，而错误码仍随
-                    // 对照目录里那份主图的存在性与内容变化（缺图 203 / 改坏 204）。
-                    // 因此本轮补齐三处盲区：实例 init 族（可绕过类方法）、stat/lstat
-                    // （SGMain IR 内 36+3 处调用，上一轮被移除）、fd 级 lseek/fstat
-                    // （经 F_GETPATH 反查路径，覆盖“Foundation 代开 fd”的情形）。
+                    // 诊断观察部分读入口及一个已在 SGMain 中定位的写入口；
+                    // 自检仅验证宿主调用可见，不据此声称覆盖全部 SDK 文件访问。
                     traceOptions = CampusProbeTraceOptionsScopedFiles |
                         CampusProbeTraceOptionsAllowMissingReference |
-                        CampusProbeTraceOptionsHostChannels;
+                        CampusProbeTraceOptionsHostChannels |
+                        CampusProbeTraceOptionsWriteEvents;
                 }
                 BOOL traceBegan = diagnostics ?
                     CampusProbeResourceTraceBeginWithOptions(effectivePath, traceOptions) :
                     CampusProbeResourceTraceBegin(path);
                 emit(@"SDK 文件跟踪", traceBegan ?
-                    @"已启用：fopen/open 与宿主通道（access/stat/opendir/lseek/fstat 及 Foundation 类方法与实例 init 读方法）自检通过，覆盖检查窗口内各线程；不展示路径和内容" :
+                    @"已启用：读入口窗口自检通过；各宿主通道与 NSData 写入通道的自检状态见报告；观察窗口内各线程，不展示路径和内容" :
                     @"入口自检、宿主通道拦截安装或参考资源准备失败；本次不能核实 SDK 文件访问");
                 mark(@"窗口开始");
 #endif
