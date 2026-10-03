@@ -28,6 +28,11 @@ static NSString *ID(id value) {
     return [value rangeOfCharacterFromSet:allowed.invertedSet].location == NSNotFound ? value : nil;
 }
 NSString *CampusPaymentIdentifier(id value) { return ID(value); }
+NSString *CampusPaymentProgramIdentifier(id value) {
+    // 程序 key 是服务端原样返回的字符串，可含标点；不是订单/机器编号。
+    // 与设备页面保持同样的有界字符串契约，不裁剪、不替换、不转换类型。
+    return Text(value, 128) && ![value containsString:@"&"] ? value : nil;
+}
 long long CampusPaymentCents(id value) {
     if ([value isKindOfClass:NSNumber.class]) {
         if (CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID()) CampusPaymentFail(@"QUOTE_AMOUNT_INVALID");
@@ -61,7 +66,7 @@ static void ValidateScope(NSDictionary *input) {
 }
 static void ValidateItems(id items) {
     if (![items isKindOfClass:NSArray.class] || [items count] != 1 ||
-        ![items[0] isKindOfClass:NSDictionary.class] || !ID(items[0][@"serviceItemId"])) CampusPaymentFail(@"QUOTE_MISMATCH");
+        ![items[0] isKindOfClass:NSDictionary.class] || !CampusPaymentProgramIdentifier(items[0][@"serviceItemId"])) CampusPaymentFail(@"QUOTE_MISMATCH");
 }
 NSString *CampusPaymentBody(CampusOriginalPurpose purpose, NSDictionary *input) {
     @try {
@@ -119,6 +124,7 @@ BOOL CampusPaymentDataValid(NSDictionary *data, CampusOriginalPurpose purpose) {
     return NO;
 }
 NSDictionary *CampusPaymentRenderInput(NSDictionary *payload, NSString *resNo, NSString *key) {
+    if (!CampusPaymentProgramIdentifier(key)) CampusPaymentFail(@"PROGRAM_UNAVAILABLE");
     NSDictionary *device = payload[@"data"][@"deviceResponse"];
     if (![device isKindOfClass:NSDictionary.class] || ![device[@"deviceCode"] isEqual:resNo]) CampusPaymentFail(@"DEVICE_MISMATCH");
     if (!Flag(device[@"deviceCanUse"], YES)) CampusPaymentFail(@"DEVICE_UNAVAILABLE");
@@ -152,8 +158,8 @@ NSDictionary *CampusPaymentQuote(NSDictionary *input, NSDictionary *quote) {
     if (![quote[@"businessType"] isEqual:@"WASH_AND_CARE"]) QuoteMismatch(@"QUOTE_BUSINESS_DIFFERENT");
     NSArray *items = quote[@"serviceItemDTOList"];
     if (![items isKindOfClass:NSArray.class] || items.count != 1 || ![items[0] isKindOfClass:NSDictionary.class]) QuoteMismatch(@"QUOTE_ITEMS_SHAPE");
-    if (!ID(items[0][@"serviceItemId"])) QuoteMismatch(@"QUOTE_PROGRAM_MISSING");
-    if (![ID(input[@"serviceItemDTOList"][0][@"serviceItemId"]) isEqual:ID(items[0][@"serviceItemId"])]) QuoteMismatch(@"QUOTE_PROGRAM_DIFFERENT");
+    if (!CampusPaymentProgramIdentifier(items[0][@"serviceItemId"])) QuoteMismatch(@"QUOTE_PROGRAM_MISSING");
+    if (![CampusPaymentProgramIdentifier(input[@"serviceItemDTOList"][0][@"serviceItemId"]) isEqual:CampusPaymentProgramIdentifier(items[0][@"serviceItemId"])]) QuoteMismatch(@"QUOTE_PROGRAM_DIFFERENT");
     long long total = CampusPaymentCents(quote[@"totalAmount"]), discount = CampusPaymentCents(quote[@"discountAmount"]), pay = CampusPaymentCents(quote[@"actualPayAmount"]);
     if (discount > total || pay != total - discount) CampusPaymentFail(@"QUOTE_AMOUNT_INVALID");
     return @{@"program": input[@"serviceItemDTOList"][0][@"serviceItemName"], @"total": CampusPaymentYuan(total),

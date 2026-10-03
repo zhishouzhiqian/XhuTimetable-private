@@ -4,6 +4,7 @@ BOOL CampusPaymentPurpose(CampusOriginalPurpose purpose);
 NSString *CampusPaymentBody(CampusOriginalPurpose purpose, NSDictionary *input);
 BOOL CampusPaymentDataValid(NSDictionary *data, CampusOriginalPurpose purpose);
 NSString *CampusPaymentIdentifier(id value);
+NSString *CampusPaymentProgramIdentifier(id value);
 long long CampusPaymentCents(id value);
 NSString *CampusPaymentYuan(long long value);
 NSDictionary *CampusPaymentRenderInput(NSDictionary *payload, NSString *resNo, NSString *key);

@@ -28,7 +28,7 @@ NSArray *CampusOriginalRenderAudit(NSDictionary *payload, NSString *resNo, NSStr
         emit([@"设备字段 / " stringByAppendingString:field], Shape(device[field]));
     emit(@"机器编号对照", [device[@"deviceCode"] isEqual:resNo] ? @"通过" : @"未通过");
     emit(@"设备 ID 付款格式", CampusPaymentIdentifier(device[@"deviceId"]) ? @"通过" : @"未通过（值隐藏）");
-    emit(@"程序 key 付款格式", CampusPaymentIdentifier(key) ? @"通过" : @"未通过；页面接受此标识，付款模型拒绝（值隐藏）");
+    emit(@"程序 key 付款格式", CampusPaymentProgramIdentifier(key) ? @"通过；保留服务端原字符串" : @"未通过有界字符串契约（值隐藏）");
     emit(@"洗衣设备类型", [device[@"deviceType"] isEqual:@"WASHING_MACHINE"] ? @"通过" : @"未通过");
     emit(@"固定时长计费类型", [device[@"modelType"] isEqual:@"FIXED_TIME_CHARGE"] ? @"通过" : @"未通过");
     @try { CampusPaymentCents(device[@"campusAreaId"]); emit(@"campusAreaId 非负整数", @"通过"); }
@@ -73,9 +73,9 @@ NSArray *CampusOriginalQuoteAudit(NSDictionary *input, id response) {
     if ([items isKindOfClass:NSArray.class]) {
         emit(@"报价程序项数量", [NSString stringWithFormat:@"%lu 项", (unsigned long)[items count]]);
         if ([items count] == 1 && [items[0] isKindOfClass:NSDictionary.class]) {
-            NSString *actual = CampusPaymentIdentifier(items[0][@"serviceItemId"]);
+            NSString *actual = CampusPaymentProgramIdentifier(items[0][@"serviceItemId"]);
             emit(@"报价程序字段 / serviceItemId", Shape(items[0][@"serviceItemId"]));
-            emit(@"报价程序对照", !actual ? @"缺失或类型未通过" : [actual isEqual:CampusPaymentIdentifier(input[@"serviceItemDTOList"][0][@"serviceItemId"])] ? @"与所选程序一致" : @"与所选程序不同");
+            emit(@"报价程序对照", !actual ? @"缺失或类型未通过" : [actual isEqual:CampusPaymentProgramIdentifier(input[@"serviceItemDTOList"][0][@"serviceItemId"])] ? @"与所选程序一致" : @"与所选程序不同");
         }
     }
     BOOL amountsValid = YES; long long total = 0, discount = 0, pay = 0;

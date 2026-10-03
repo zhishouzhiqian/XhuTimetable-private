@@ -7,13 +7,16 @@ int main(void) {
             NSCAssert(CampusOriginalAccountAPI(purpose.integerValue) == nil, @"轻量诊断开放了创建或付款入口");
         NSDictionary *input = CampusPaymentRenderInput(PaymentDevice(), @"M1", @"standard");
         NSCAssert([CampusOriginalRenderAudit(PaymentDevice(), @"M1", @"standard").lastObject[@"result"] isEqual:@"通过"], @"正常设备转换诊断未通过");
+        NSMutableDictionary *punctuation = [NSJSONSerialization JSONObjectWithData:[NSJSONSerialization dataWithJSONObject:PaymentDevice() options:0 error:nil] options:NSJSONReadingMutableContainers error:nil];
+        punctuation[@"data"][@"deviceResponse"][@"deviceWorkingModelDTOS"][0][@"priceModelList"][0][@"key"] = @"program.with:punctuation";
+        NSCAssert([CampusOriginalRenderAudit(punctuation, @"M1", @"program.with:punctuation").lastObject[@"result"] isEqual:@"通过"], @"含标点程序标识转换仍未通过");
         for (NSString *field in @[@"deviceId", @"campusAreaId", @"price", @"key", @"deviceType"]) {
             NSData *bytes = [NSJSONSerialization dataWithJSONObject:PaymentDevice() options:0 error:nil];
             NSMutableDictionary *payload = [NSJSONSerialization JSONObjectWithData:bytes options:NSJSONReadingMutableContainers error:nil];
             NSMutableDictionary *device = payload[@"data"][@"deviceResponse"];
             NSMutableDictionary *price = device[@"deviceWorkingModelDTOS"][0][@"priceModelList"][0];
             NSString *key = @"standard";
-            if ([field isEqual:@"key"]) { key = @"private.program:value"; price[@"key"] = key; }
+            if ([field isEqual:@"key"]) { key = @"private.program:\nvalue"; price[@"key"] = key; }
             else if ([field isEqual:@"price"]) [price removeObjectForKey:field];
             else if ([field isEqual:@"deviceType"]) device[field] = @"private-invalid-type";
             else [device removeObjectForKey:field];

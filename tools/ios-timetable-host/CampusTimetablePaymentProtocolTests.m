@@ -1,5 +1,32 @@
 #import "CampusTimetablePaymentFixtures.h"
 static NSData *Data(id value) { return [NSJSONSerialization dataWithJSONObject:value options:0 error:nil]; }
+static void CheckProgramContract(NSString *key, NSDictionary *identity, NSDictionary *factors, NSString *(^encode)(NSString *)) {
+    // 与真机报告一致：价格、校区和布尔标记均可由服务端以字符串返回。
+    NSMutableDictionary *payload = [NSJSONSerialization JSONObjectWithData:Data(PaymentDevice()) options:NSJSONReadingMutableContainers error:nil];
+    NSMutableDictionary *device = payload[@"data"][@"deviceResponse"];
+    NSMutableDictionary *mode = device[@"deviceWorkingModelDTOS"][0], *price = mode[@"priceModelList"][0];
+    device[@"campusAreaId"] = @"7"; device[@"deviceCanUse"] = @"true";
+    mode[@"isSupport"] = @"true"; price[@"isOpen"] = @"true"; price[@"price"] = @"400"; price[@"key"] = key;
+    NSDictionary *input = CampusPaymentRenderInput(payload, @"M1", key);
+    NSMutableDictionary *quote = [PaymentQuote() mutableCopy];
+    quote[@"serviceItemDTOList"] = @[@{@"serviceItemId": key, @"serviceItemName": @"标准洗"}];
+    NSCAssert([CampusPaymentQuote(input, quote)[@"pay"] isEqual:@"3.00"], @"包含标点的程序报价被拒绝");
+    NSMutableDictionary *wrong = [quote mutableCopy]; wrong[@"serviceItemDTOList"] = @[@{@"serviceItemId": [key stringByAppendingString:@"-other"]}];
+    RejectPayment(^{ CampusPaymentQuote(input, wrong); }, @"QUOTE_MISMATCH");
+    for (NSNumber *number in @[@(CampusOriginalPurposeRender), @(CampusOriginalPurposeCreate)]) {
+        CampusOriginalPurpose purpose = number.integerValue;
+        NSDictionary *selection = purpose == CampusOriginalPurposeRender ? input : CampusPaymentCreateInput(input, quote, @123);
+        NSString *body = CampusPaymentBody(purpose, selection), *reason = nil;
+        NSCAssert(body != nil, @"包含标点的程序正文未生成");
+        NSDictionary *envelope = [NSJSONSerialization JSONObjectWithData:[body dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+        NSDictionary *inner = [NSJSONSerialization JSONObjectWithData:[envelope[@"requestJson"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+        NSCAssert([inner[@"serviceItemDTOList"][0][@"serviceItemId"] isEqual:key], @"程序标识被修改或截断");
+        NSURLRequest *request = CampusOriginalAccountRequest(identity, @"1234567890", body, factors, @{@"sid": @"test-session", @"uid": @"123"}, purpose, encode, &reason);
+        NSCAssert(request && CampusOriginalAccountRequestInScope(request, purpose), @"程序标识 POST 契约失败：%@", reason);
+        NSString *form = [[NSString alloc] initWithData:request.HTTPBody encoding:NSUTF8StringEncoding];
+        NSCAssert([[[form substringFromIndex:5] stringByRemovingPercentEncoding] isEqual:body], @"程序标识编码改变签名正文");
+    }
+}
 int main(void) {
     @autoreleasepool {
         for (id invalid in @[@YES, @-1, @"1.1", @"9223372036854775808", @"", @"1e3", NSNull.null])
@@ -55,6 +82,11 @@ int main(void) {
         NSString *(^encode)(NSString *) = ^NSString *(NSString *text) {
             return [text stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"]];
         };
+        for (NSString *key in @[@"mode.with.dot", @"mode:with/slash", @"mode+percent%=\"quoted\"", @"程序 标识"])
+            CheckProgramContract(key, identity, factors, encode);
+        for (id invalid in @[@"", @"bad\nkey", @"bad&key", @YES, @123, NSNull.null, [@"x" stringByPaddingToLength:129 withString:@"x" startingAtIndex:0]])
+            NSCAssert(CampusPaymentProgramIdentifier(invalid) == nil, @"非法程序标识被接受");
+        NSCAssert(CampusPaymentIdentifier(@"order.with.dot") == nil, @"程序标识修复放宽了订单编号契约");
         for (NSNumber *number in @[@(CampusOriginalPurposeRender), @(CampusOriginalPurposeSequence), @(CampusOriginalPurposeCreate), @(CampusOriginalPurposeCheckout), @(CampusOriginalPurposePaymethod)]) {
             CampusOriginalPurpose purpose = number.integerValue;
             NSDictionary *selection = purpose == CampusOriginalPurposeRender ? input : purpose == CampusOriginalPurposeCreate ? create :
