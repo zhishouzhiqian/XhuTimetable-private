@@ -62,9 +62,33 @@ int main(void) {
                 purpose == CampusOriginalPurposeCheckout ? @{@"checkoutId": @"88"} : @{@"checkoutId": @"88", @"extraAttr": @"{\"bizOrderId\":\"88\"}"};
             NSString *body = CampusPaymentBody(purpose, selection);
             NSCAssert(body != nil, @"测试前置条件：付款正文未生成");
-            NSURLRequest *request = CampusOriginalAccountRequest(identity, @"1234567890", body, factors, @{@"sid": @"test-session", @"uid": @"123"}, purpose, encode, NULL);
-            NSCAssert(request && CampusOriginalAccountRequestInScope(request, purpose), @"付款 POST 契约不通过");
+            NSString *reason = nil;
+            NSDictionary *session = @{@"sid": @"test-session", @"uid": @"123"};
+            NSURLRequest *request = CampusOriginalAccountRequest(identity, @"1234567890", body, factors, session, purpose, encode, &reason);
+            NSCAssert(request && CampusOriginalAccountRequestInScope(request, purpose), @"付款 POST 契约不通过：阶段 %@，原因 %@", number, reason);
             NSCAssert([[[[NSString alloc] initWithData:request.HTTPBody encoding:NSUTF8StringEncoding] substringFromIndex:5].stringByRemovingPercentEncoding isEqual:body], @"付款正文编码变化");
+            if (purpose <= CampusOriginalPurposeCreate) {
+                // 固定排序与空白变化必须保持契约有效，且不能重建已准备的表单正文。
+                NSMutableDictionary *envelope = [[NSJSONSerialization JSONObjectWithData:[body dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] mutableCopy];
+                NSData *sorted = [NSJSONSerialization dataWithJSONObject:selection options:NSJSONWritingSortedKeys error:nil];
+                envelope[@"requestJson"] = [NSString stringWithFormat:@" %@ ", [[NSString alloc] initWithData:sorted encoding:NSUTF8StringEncoding]];
+                NSString *reordered = [[NSString alloc] initWithData:Data(envelope) encoding:NSUTF8StringEncoding];
+                NSURLRequest *equivalent = CampusOriginalAccountRequest(identity, @"1234567890", reordered, factors, session, purpose, encode, &reason);
+                NSCAssert(equivalent && CampusOriginalAccountRequestInScope(equivalent, purpose), @"等价嵌套 JSON 被拒绝：%@，%@", number, reason);
+                NSCAssert([[[[NSString alloc] initWithData:equivalent.HTTPBody encoding:NSUTF8StringEncoding] substringFromIndex:5].stringByRemovingPercentEncoding isEqual:reordered], @"等价正文被重建");
+                envelope[@"extra"] = @"forbidden";
+                NSString *invalid = [[NSString alloc] initWithData:Data(envelope) encoding:NSUTF8StringEncoding];
+                NSCAssert(!CampusOriginalAccountRequest(identity, @"1234567890", invalid, factors, session, purpose, encode, NULL), @"付款接受额外外层字段");
+                [envelope removeObjectForKey:@"extra"];
+                NSString *type = envelope[@"requestType"]; envelope[@"requestType"] = @"UNKNOWN";
+                invalid = [[NSString alloc] initWithData:Data(envelope) encoding:NSUTF8StringEncoding];
+                NSCAssert(!CampusOriginalAccountRequest(identity, @"1234567890", invalid, factors, session, purpose, encode, NULL), @"付款接受错误请求类型");
+                envelope[@"requestType"] = type;
+                NSMutableDictionary *extraQuery = [selection mutableCopy]; extraQuery[@"extra"] = @"forbidden";
+                envelope[@"requestJson"] = [[NSString alloc] initWithData:Data(extraQuery) encoding:NSUTF8StringEncoding];
+                invalid = [[NSString alloc] initWithData:Data(envelope) encoding:NSUTF8StringEncoding];
+                NSCAssert(!CampusOriginalAccountRequest(identity, @"1234567890", invalid, factors, session, purpose, encode, NULL), @"付款接受额外内层字段");
+            }
             NSMutableURLRequest *foreign = [request mutableCopy]; foreign.URL = [NSURL URLWithString:@"https://example.invalid/"];
             NSCAssert(!CampusOriginalAccountRequestInScope(foreign, purpose), @"付款允许外部目的地");
             foreign = [request mutableCopy]; foreign.HTTPShouldHandleCookies = YES;

@@ -153,8 +153,13 @@ static BOOL AccountBodyValid(NSString *body, CampusOriginalPurpose purpose, NSDi
 #ifdef CAMPUS_TIMETABLE_HOST
     if (CampusPaymentPurpose(purpose)) {
         id query = purpose <= CampusOriginalPurposeCreate ? AccountJSON(object[@"requestJson"]) : object;
-        NSString *expected = CampusPaymentBody(purpose, query);
-        return expected && [object isEqual:AccountJSON(expected)];
+        NSDictionary *expected = AccountJSON(CampusPaymentBody(purpose, query));
+        if (!expected) return NO;
+        // requestJson 是嵌套 JSON 字符串；字段顺序不影响契约，签名与表单仍使用原始正文。
+        if (purpose <= CampusOriginalPurposeCreate)
+            return object.count == 2 && [object[@"requestType"] isEqual:expected[@"requestType"]] &&
+                [query isEqual:AccountJSON(expected[@"requestJson"])];
+        return [object isEqual:expected];
     }
 #endif
     if (purpose == CampusOriginalPurposeProfile) return [object isEqual:@{@"platForm": @"ios"}];
