@@ -222,4 +222,25 @@ void CampusOriginalLoginProbeTests(void) {
     NSCAssert([orderEvidence[@"verified"] boolValue] && [orderEvidence[@"bizOrderId"] isEqual:@"123"] && ![orderEvidence.description containsString:@"SECRET"], @"订单详情身份或脱敏不正确");
     NSCAssert(CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @NO, @"data": @{@"response": @{@"bizOrderId": @"123"}}}}), CampusOriginalPurposeOrderDetail) == nil, @"缺少支付/履约字段的详情被接受");
 
+    NSString *qr = @"https://share.confong.cn/cf?biz=wash&isv=CAMPUS&id=TEST_DEVICE";
+    NSCAssert([CampusOriginalMachineNumber(qr) isEqual:@"TEST_DEVICE"] && [CampusOriginalMachineNumber(@"  TEST_DEVICE  ") isEqual:@"TEST_DEVICE"], @"机器编号或官方二维码识别失败");
+    NSURLComponents *wrapped = [NSURLComponents componentsWithString:@"https://share.confong.cn/app/tmall-xiaoyuan/tmxy-m-share/laundry/deviceDetail"];
+    wrapped.queryItems = @[[NSURLQueryItem queryItemWithName:@"result" value:qr]];
+    NSCAssert([CampusOriginalMachineNumber(wrapped.URL.absoluteString) isEqual:@"TEST_DEVICE"], @"官方嵌套二维码识别失败");
+    for (NSString *invalid in @[@"http://share.confong.cn/cf?biz=x&isv=y&id=TEST_DEVICE", @"https://share.confong.cn.attacker.invalid/cf?biz=x&isv=y&id=TEST_DEVICE", @"https://user@share.confong.cn/cf?biz=x&isv=y&id=TEST_DEVICE", @"https://share.confong.cn/cf?biz=x&isv=y&id=A&id=B", @"https://share.confong.cn/cf?id=A", @"https://share.confong.cn:444/cf?biz=x&isv=y&id=A"]) {
+        NSCAssert(CampusOriginalMachineNumber(invalid) == nil, @"不合格二维码目的地或歧义编号被接受");
+    }
+    NSArray *emptyDisplay = CampusOriginalReadDisplay(LoginTestData(@{@"data": @{@"fail": @"false", @"data": @{@"urgentOrderListResponse": @[]}}}), CampusOriginalPurposeOrders);
+    NSCAssert(emptyDisplay.count == 1 && [emptyDisplay[0][@"detail"] isEqual:@"本次查询暂无记录"], @"正常空运行列表未显示清晰文案");
+    NSCAssert(CampusOriginalReadDisplay(LoginTestData(@{@"data": @{@"fail": @YES, @"data": @{@"urgentOrderListResponse": @[]}}}), CampusOriginalPurposeOrders).count == 0, @"失败响应被展示为空订单");
+    NSDictionary *displayBody = @{@"data": @{@"fail": @NO, @"data": @{@"deviceResponse": @{@"deviceCode": @"TEST_DEVICE", @"deviceId": @"12345", @"deviceCanUse": @YES,
+        @"deviceName": @"测试洗衣机", @"buildingName": @"测试楼栋", @"floorName": @"2 层", @"sid": @"SECRET_SESSION",
+        @"deviceWorkingModelDTOS": @[@{@"isSupport": @YES, @"priceModelList": @[@{@"key": @"PROGRAM", @"isOpen": @YES, @"price": @390, @"priceYuan": @"3.90", @"desc": @"标准洗", @"defaultDetails": @"约 40 分钟"}]}]}}}};
+    NSArray *display = CampusOriginalReadDisplay(LoginTestData(displayBody), CampusOriginalPurposeDeviceInfo);
+    NSCAssert(display.count == 2 && [display[1][@"detail"] containsString:@"3.90 元"] && ![display.description containsString:@"SECRET"] && ![display.description containsString:@"12345"], @"设备显示未保持明确元价格或泄露会话/内部 ID");
+    NSMutableDictionary *invalidPrice = [displayBody[@"data"][@"data"][@"deviceResponse"] mutableCopy];
+    invalidPrice[@"deviceWorkingModelDTOS"] = @[@{@"isSupport": @YES, @"priceModelList": @[@{@"key": @"PROGRAM", @"isOpen": @YES, @"price": @390}]}];
+    NSArray *withoutYuan = CampusOriginalReadDisplay(LoginTestData(@{@"data": @{@"fail": @NO, @"data": @{@"deviceResponse": invalidPrice}}}), CampusOriginalPurposeDeviceInfo);
+    NSCAssert([withoutYuan[1][@"detail"] containsString:@"标示价格未提供"], @"单位未经确认的原始价格被推算为元");
+
 }

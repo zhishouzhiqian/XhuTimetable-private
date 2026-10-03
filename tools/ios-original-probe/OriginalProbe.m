@@ -586,7 +586,7 @@ static NSString *ProbeReadLabel(CampusOriginalPurpose purpose) {
 
 // 每个固定只读阶段至多一次；单项结构失败不掩盖其它接口的结果。
 static void ProbeReadBatch(NSDictionary *context, NSDictionary *session, NSUInteger index, NSDictionary *device, NSDictionary *order,
-                           void (^emit)(NSString *, NSString *), void (^completion)(void)) {
+                           void (^emit)(NSString *, NSString *), void (^publish)(NSArray *), void (^completion)(void)) {
     NSArray *purposes = @[@(CampusOriginalPurposeOrders), @(CampusOriginalPurposeHistory),
         @(CampusOriginalPurposeOrderDetail), @(CampusOriginalPurposeBuildings), @(CampusOriginalPurposeDevices), @(CampusOriginalPurposeDeviceInfo)];
     if (index >= purposes.count) { completion(); return; }
@@ -594,7 +594,7 @@ static void ProbeReadBatch(NSDictionary *context, NSDictionary *session, NSUInte
     NSString *label = ProbeReadLabel(purpose);
     if (purpose == CampusOriginalPurposeOrderDetail && !order) {
         emit(label, @"列表没有通过校验的订单身份；正常跳过详情；不猜测订单标识");
-        ProbeReadBatch(context, session, index + 1, device, order, emit, completion); return;
+        ProbeReadBatch(context, session, index + 1, device, order, emit, publish, completion); return;
     }
     if (purpose == CampusOriginalPurposeDeviceInfo && !device) {
         emit(label, @"没有有效的手填机器编号或列表设备；正常跳过详情；不猜测设备标识"); completion(); return;
@@ -604,7 +604,7 @@ static void ProbeReadBatch(NSDictionary *context, NSDictionary *session, NSUInte
     @catch (NSException *exception) { emit(label, @"请求准备异常（正文隐藏）；未发送"); }
     if (!request) {
         emit(label, @"准备未通过；继续其它独立只读检查");
-        ProbeReadBatch(context, session, index + 1, device, order, emit, completion); return;
+        ProbeReadBatch(context, session, index + 1, device, order, emit, publish, completion); return;
     }
     CampusOriginalAccountSend(request, purpose, ^(NSDictionary *result, NSDictionary *evidence) {
         emit([label stringByAppendingString:@"响应"], result[@"summary"]);
@@ -612,23 +612,26 @@ static void ProbeReadBatch(NSDictionary *context, NSDictionary *session, NSUInte
         if ([result[@"success"] boolValue]) {
             if (purpose == CampusOriginalPurposeDeviceInfo) {
                 if ([device[@"resNo"] isEqual:evidence[@"resNo"]] && (!device[@"deviceId"] || [device[@"deviceId"] isEqual:evidence[@"deviceId"]])) {
+                    if (publish) publish(evidence[@"display"]);
                     emit(label, [NSString stringWithFormat:@"设备身份与查询来源一致；可用状态 %@；开放程序 %lu 项；标识、位置及价格不展示", [evidence[@"canUse"] boolValue] ? @"可用" : @"不可用", (unsigned long)[evidence[@"programs"] unsignedIntegerValue]]);
                 } else emit(label, @"设备身份与查询来源不一致；此项未通过");
             } else if (purpose == CampusOriginalPurposeOrderDetail) {
+                if ([order[@"bizOrderId"] isEqual:evidence[@"bizOrderId"]] && publish) publish(evidence[@"display"]);
                 emit(label, [order[@"bizOrderId"] isEqual:evidence[@"bizOrderId"]] ?
                     @"订单身份与本人列表一致；支付及履约字段完整（状态值与标识不展示）" : @"详情与本人列表订单不一致；此项未通过");
             } else {
+                if (publish) publish(evidence[@"display"]);
                 emit(label, [NSString stringWithFormat:@"业务与数组结构通过；%lu 项（内容不展示）；空数组表示本次正常无记录", (unsigned long)[evidence[@"count"] unsignedIntegerValue]]);
                 if (purpose == CampusOriginalPurposeDevices && !context[@"manualDevice"]) nextDevice = evidence[@"device"];
                 if ((purpose == CampusOriginalPurposeOrders || purpose == CampusOriginalPurposeHistory) && !nextOrder) nextOrder = evidence[@"order"];
             }
         }
-        ProbeReadBatch(context, session, index + 1, nextDevice, nextOrder, emit, completion);
+        ProbeReadBatch(context, session, index + 1, nextDevice, nextOrder, emit, publish, completion);
     });
 }
 
 void CampusOriginalProbeLoginRun(NSDictionary *context, NSString *code,
-                                void (^progress)(NSArray *), void (^completion)(NSArray *)) {
+                                void (^progress)(NSArray *), void (^publish)(NSArray *), void (^completion)(NSArray *)) {
     NSMutableArray *rows = [NSMutableArray array];
     void (^emit)(NSString *, NSString *) = ^(NSString *step, NSString *result) {
         [rows addObject:@{@"step": step, @"result": result}]; if (progress) progress([rows copy]);
@@ -650,7 +653,7 @@ void CampusOriginalProbeLoginRun(NSDictionary *context, NSString *code,
             emit(@"本人资料响应", verified[@"summary"]);
             if (![verified[@"success"] boolValue]) { completion([rows copy]); return; }
             emit(@"本人资料验收", @"返回身份字段通过；手机号及用户信息不展示");
-            ProbeReadBatch(context, session, 0, context[@"manualDevice"], nil, emit, ^{
+            ProbeReadBatch(context, session, 0, context[@"manualDevice"], nil, emit, publish, ^{
                 emit(@"本批检查结束", @"登录、资料及六项只读检查已结束；各项是否通过见上文，不能把检查结束等同于全部成功；未下单、付款或持久化会话");
                 completion([rows copy]);
             });
@@ -665,6 +668,8 @@ void CampusOriginalProbeLoginRun(NSDictionary *context, NSString *code,
 @property(nonatomic, strong) UIButton *network;
 @property(nonatomic, strong) UIButton *login;
 @property(nonatomic, strong) UITextField *machine;
+@property(nonatomic, strong) UIButton *results;
+@property(nonatomic, strong) NSMutableArray *readRows;
 @property(nonatomic, strong) NSDictionary *loginContext;
 @property(nonatomic, strong) NSArray *networkRows;
 @property(nonatomic) BOOL loginStarted;
@@ -696,7 +701,7 @@ void CampusOriginalProbeLoginRun(NSDictionary *context, NSString *code,
     self.report = [[UITextView alloc] init];
     self.report.editable = NO;
     self.report.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.report.text = @"诊断版本：10\n当前运行专用 Application/AppDelegate\n\n先点击联网综合检查，配置、注册与 ID 复用全部通过后，本人登录按钮才启用。本人登录由你在官方网页手动操作，取得授权后依次交换校园会话、查询本人资料和洗衣运行订单；不下单、不付款。账号、授权码与会话不写入报告或持久化。\n离线检查仍需断网。原二进制的类加载代码可能执行。\n每项检查每个进程只执行一次。";
+    self.report.text = @"诊断版本：11\n当前运行专用 Application/AppDelegate\n\n先点击联网综合检查，配置、注册与 ID 复用全部通过后，本人登录按钮才启用。本人登录由你在官方网页手动操作，取得授权后依次交换校园会话、查询本人资料和洗衣运行订单；不下单、不付款。账号、授权码与会话不写入报告或持久化。\n离线检查仍需断网。原二进制的类加载代码可能执行。\n每项检查每个进程只执行一次。";
     [stack addArrangedSubview:self.report];
     self.start = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.start setTitle:@"开始本地检查" forState:UIControlStateNormal];
@@ -710,17 +715,30 @@ void CampusOriginalProbeLoginRun(NSDictionary *context, NSString *code,
     [self.login setTitle:@"本人登录及洗衣综合只读检查" forState:UIControlStateNormal]; self.login.enabled = NO;
     [self.login addTarget:self action:@selector(runLoginProbe) forControlEvents:UIControlEventTouchUpInside];
     self.machine = [[UITextField alloc] init];
-    self.machine.placeholder = @"可选：机器编号（请在登录检查前填写）";
+    self.machine.placeholder = @"可选：机器编号或官方二维码链接";
     self.machine.borderStyle = UITextBorderStyleRoundedRect;
     self.machine.autocorrectionType = UITextAutocorrectionTypeNo;
     self.machine.autocapitalizationType = UITextAutocapitalizationTypeNone;
     self.machine.clearButtonMode = UITextFieldViewModeWhileEditing;
     [stack addArrangedSubview:self.machine];
     [stack addArrangedSubview:self.login];
+    self.readRows = [NSMutableArray array];
+    self.results = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.results setTitle:@"查看订单、设备及洗衣程序" forState:UIControlStateNormal];
+    self.results.enabled = NO;
+    [self.results addTarget:self action:@selector(showReadResults) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.results];
     UIButton *copy = [UIButton buttonWithType:UIButtonTypeSystem];
     [copy setTitle:@"复制诊断报告" forState:UIControlStateNormal];
     [copy addTarget:self action:@selector(copyReport) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:copy];
+}
+- (void)showReadResults {
+    if (!self.readRows.count) return;
+    NSArray *snapshot = [self.readRows copy];
+    CampusOriginalPresentReadResults(self, snapshot, ^{
+        [self.readRows removeAllObjects]; self.results.enabled = NO;
+    });
 }
 - (void)copyReport { UIPasteboard.generalPasteboard.string = self.report.text; }
 - (void)runNetworkProbe {
@@ -731,7 +749,7 @@ void CampusOriginalProbeLoginRun(NSDictionary *context, NSString *code,
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：10\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：11\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
@@ -751,8 +769,12 @@ void CampusOriginalProbeLoginRun(NSDictionary *context, NSString *code,
 }
 - (void)runLoginProbe {
     if (self.loginStarted || !self.networkFinished || !self.loginContext) return;
-    NSString *number = [self.machine.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-    if (number.length) {
+    NSString *input = [self.machine.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (input.length) {
+        NSString *number = CampusOriginalMachineNumber(input);
+        if (!number) {
+            self.report.text = [self.report.text stringByAppendingString:@"\n机器输入：编号或官方二维码链接未通过；未打开网址，未发送设备查询。\n"]; return;
+        }
         NSDictionary *selection = @{@"resNo": number};
         if (!CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, selection)) {
             self.report.text = [self.report.text stringByAppendingString:@"\n机器编号：格式未通过，请填写 1–128 位字母、数字、下划线或横线；不要填写整条二维码链接。\n"]; return;
@@ -771,13 +793,16 @@ void CampusOriginalProbeLoginRun(NSDictionary *context, NSString *code,
         self.report.text = [self.report.text stringByAppendingString:@"\n本人授权：新回调已取得（授权码不展示）；开始校园会话交换及只读验证。\n"];
         __block BOOL finished = NO;
         void (^show)(NSArray *) = ^(NSArray *rows) {
-            NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：10\n当前运行专用 Application/AppDelegate\n\n"];
+            NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：11\n当前运行专用 Application/AppDelegate\n\n"];
             for (NSDictionary *row in [self.networkRows arrayByAddingObjectsFromArray:rows]) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
             self.report.text = text;
         };
         dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
             CampusOriginalProbeLoginRun(context, code, ^(NSArray *rows) { dispatch_async(dispatch_get_main_queue(), ^{ show(rows); }); },
-                ^(NSArray *rows) { dispatch_async(dispatch_get_main_queue(), ^{ finished = YES; show(rows); }); });
+                ^(NSArray *items) { dispatch_async(dispatch_get_main_queue(), ^{
+                    if ([items isKindOfClass:NSArray.class]) [self.readRows addObjectsFromArray:items];
+                }); },
+                ^(NSArray *rows) { dispatch_async(dispatch_get_main_queue(), ^{ finished = YES; self.results.enabled = self.readRows.count > 0; show(rows); }); });
         });
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 210 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             if (!finished) self.report.text = [self.report.text stringByAppendingString:@"\n登录/只读综合检查超过 210 秒；请复制报告并彻底关闭应用，SDK 调用未被取消。\n"];
@@ -792,7 +817,7 @@ void CampusOriginalProbeLoginRun(NSDictionary *context, NSString *code,
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：10\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：11\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };

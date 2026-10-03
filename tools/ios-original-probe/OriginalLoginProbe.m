@@ -339,3 +339,90 @@ NSString *CampusOriginalAccountShape(NSData *body, CampusOriginalPurpose purpose
     id value = purpose == CampusOriginalPurposeDevices && [inner isKindOfClass:NSDictionary.class] ? inner[@"success"] : data[@"fail"];
     return [NSString stringWithFormat:@"%@=%@；内层=%@；%@=%@", flag, AccountShapeType(value), AccountShapeType(inner), key, AccountShapeType(leaf)];
 }
+
+
+static NSURLComponents *AccountQRURL(NSString *text) {
+    NSURLComponents *url = [NSURLComponents componentsWithString:text];
+    if (![url.scheme.lowercaseString isEqual:@"https"] || ![url.host.lowercaseString isEqual:@"share.confong.cn"] ||
+        url.user || url.password || url.fragment || (url.port && ![url.port isEqual:@443])) return nil;
+    return url;
+}
+
+static NSString *AccountQRItem(NSURLComponents *url, NSString *name) {
+    NSString *value = nil; NSUInteger count = 0;
+    for (NSURLQueryItem *item in url.queryItems) if ([item.name isEqual:name]) { value = item.value; count++; }
+    return count == 1 && AccountText(value, 2048) ? value : nil;
+}
+
+NSString *CampusOriginalMachineNumber(NSString *contents) {
+    if (![contents isKindOfClass:NSString.class] || contents.length > 2048) return nil;
+    NSString *text = [contents stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (AccountDeviceCode(text)) return text;
+    NSURLComponents *url = AccountQRURL(text);
+    if (!url) return nil;
+    if ([url.percentEncodedPath isEqual:@"/app/tmall-xiaoyuan/tmxy-m-share/laundry/deviceDetail"]) {
+        NSString *nested = AccountQRItem(url, @"result");
+        url = nested ? AccountQRURL(nested) : nil;
+    }
+    if (![url.percentEncodedPath isEqual:@"/cf"] || !AccountQRItem(url, @"biz") || !AccountQRItem(url, @"isv")) return nil;
+    NSString *number = AccountQRItem(url, @"id");
+    return AccountDeviceCode(number) ? number : nil;
+}
+
+static NSString *AccountDisplayText(id value, NSString *fallback) {
+    return AccountText(value, 256) ? value : fallback;
+}
+
+static NSString *AccountOrderLabel(id pay, id fulfil) {
+    if ([pay isEqual:@"CLOSED"]) return @"订单已关闭";
+    if (![pay isEqual:@"SUCCEED"]) return @"付款尚未确认";
+    if ([fulfil isEqual:@"COMPLETED"]) return @"已付款 · 洗衣完成";
+    if ([fulfil isEqual:@"FULFILLING"]) return @"已付款 · 运行中";
+    if ([fulfil isEqual:@"ERROR_COMPLETE"]) return @"已付款 · 服务异常，请核对订单";
+    return @"已付款 · 等待设备状态确认";
+}
+
+// 仅送到本人结果页面；不写入诊断报告、剪贴板或持久化存储。
+NSArray *CampusOriginalReadDisplay(NSData *body, CampusOriginalPurpose purpose) {
+    if (!CampusOriginalAccountEvidence(body, purpose)) return @[];
+    NSDictionary *root = [NSJSONSerialization JSONObjectWithData:body options:0 error:nil];
+    NSDictionary *data = root[@"data"];
+    NSMutableArray *result = [NSMutableArray array];
+    if (purpose == CampusOriginalPurposeOrders || purpose == CampusOriginalPurposeHistory) {
+        NSArray *items = data[@"data"][purpose == CampusOriginalPurposeOrders ? @"urgentOrderListResponse" : @"orderListResponses"];
+        NSString *section = purpose == CampusOriginalPurposeOrders ? @"运行订单" : @"历史订单";
+        if (!items.count) [result addObject:@{@"title": section, @"detail": @"本次查询暂无记录"}];
+        for (NSDictionary *item in items) {
+            NSString *name = AccountDisplayText(item[@"deviceName"], @"洗衣机");
+            NSString *program = AccountDisplayText(item[@"workModeName"], @"程序未提供");
+            NSString *status = purpose == CampusOriginalPurposeHistory ? AccountOrderLabel(item[@"payStatusEnum"], item[@"fulfilStatus"]) : @"运行列表记录；状态以详情为准";
+            [result addObject:@{@"title": [NSString stringWithFormat:@"%@ · %@", section, name], @"detail": [NSString stringWithFormat:@"%@\n%@", program, status]}];
+        }
+    } else if (purpose == CampusOriginalPurposeOrderDetail) {
+        NSDictionary *item = data[@"data"][@"response"];
+        [result addObject:@{@"title": @"本人订单详情", @"detail": [NSString stringWithFormat:@"%@\n%@\n%@ %@",
+            AccountDisplayText(item[@"workModeName"], @"程序未提供"), AccountOrderLabel(item[@"payStatus"], item[@"fulfilStatus"]),
+            AccountDisplayText(item[@"buildingName"], @""), AccountDisplayText(item[@"floorName"], @"")]}];
+    } else if (purpose == CampusOriginalPurposeDeviceInfo) {
+        NSDictionary *item = data[@"data"][@"deviceResponse"];
+        [result addObject:@{@"title": AccountDisplayText(item[@"deviceName"], @"洗衣机"), @"detail": [NSString stringWithFormat:@"%@ %@\n%@ · %@",
+            AccountDisplayText(item[@"buildingName"], @"位置未提供"), AccountDisplayText(item[@"floorName"], @""),
+            AccountBoolean(item[@"deviceCanUse"], YES) ? @"当前可用" : @"当前不可用", AccountDisplayText(item[@"workbenchStatusDESC"], @"状态描述未提供")]}];
+        for (NSDictionary *mode in item[@"deviceWorkingModelDTOS"]) {
+            if (!AccountBoolean(mode[@"isSupport"], YES)) continue;
+            for (NSDictionary *price in mode[@"priceModelList"]) {
+                if (!AccountBoolean(price[@"isOpen"], YES) || !AccountText(price[@"key"], 128)) continue;
+                // price 原始单位未经换算；只显示服务器明确提供的 priceYuan。
+                id rawYuan = price[@"priceYuan"];
+                if ([rawYuan isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)rawYuan) != CFBooleanGetTypeID()) rawYuan = [rawYuan stringValue];
+                NSString *yuan = AccountDisplayText(rawYuan, nil);
+                NSRegularExpression *number = [NSRegularExpression regularExpressionWithPattern:@"^[0-9]{1,6}(\\.[0-9]{1,2})?$" options:0 error:nil];
+                BOOL validPrice = yuan && [number numberOfMatchesInString:yuan options:0 range:NSMakeRange(0, yuan.length)] == 1;
+                [result addObject:@{@"title": AccountDisplayText(price[@"desc"], @"洗衣程序"), @"detail": [NSString stringWithFormat:@"%@\n%@\n%@",
+                    AccountDisplayText(price[@"defaultDetails"], @"时长说明未提供"), validPrice ? [NSString stringWithFormat:@"标示价格：%@ 元", yuan] : @"标示价格未提供",
+                    @"实际应付金额尚未查询；本页仅查看，不下单"]}];
+            }
+        }
+    }
+    return result;
+}

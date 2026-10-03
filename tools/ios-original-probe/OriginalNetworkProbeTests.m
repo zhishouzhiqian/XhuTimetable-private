@@ -146,4 +146,10 @@ void CampusOriginalNetworkProbeTests(void) {
         NSCAssert(![result[@"success"] boolValue] && [result[@"summary"] containsString:code] && ![result.description containsString:@"SECRET"], @"原组件已知错误仍被归为 UNKNOWN 或泄露正文");
     }
 
+    NSData *bizError = [NSJSONSerialization dataWithJSONObject:@{@"ret": @[@"FAIL_BIZ_QUERY_REJECTED::SECRET_BODY"]} options:0 error:nil];
+    NSDictionary *bizResult = CampusOriginalConfigOutcome(200, bizError, 0, NO, NO);
+    NSCAssert(![bizResult[@"success"] boolValue] && [bizResult[@"summary"] containsString:@"FAIL_BIZ_QUERY_REJECTED"] && ![bizResult.description containsString:@"SECRET"], @"规范业务错误未显示或正文泄露");
+    NSData *badCode = [NSJSONSerialization dataWithJSONObject:@{@"ret": @[@"FAIL_BIZ_SECRET123456789::SECRET_BODY"]} options:0 error:nil];
+    NSCAssert(![CampusOriginalConfigOutcome(200, badCode, 0, NO, NO).description containsString:@"SECRET"], @"非规范错误名称泄露标识");
+
 }

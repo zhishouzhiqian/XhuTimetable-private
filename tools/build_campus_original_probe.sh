@@ -20,6 +20,7 @@ xcrun --sdk iphoneos clang -fobjc-arc -fblocks -fvisibility=hidden -dynamiclib \
   tools/ios-original-probe/OriginalProbe.m tools/ios-original-probe/OriginalNetworkProbe.m \
   tools/ios-original-probe/OriginalDeviceProbe.m \
   tools/ios-original-probe/OriginalLoginProbe.m tools/ios-original-probe/OriginalAuthorizationView.m \
+  tools/ios-original-probe/OriginalReadResultsView.m \
   -framework Foundation -framework CoreFoundation -framework CoreGraphics -framework UIKit -framework WebKit \
   -o "$output/CampusOriginalProbe.dylib"
 xcrun nm -gU "$output/CampusOriginalProbe.dylib" > "$output/exports.txt"

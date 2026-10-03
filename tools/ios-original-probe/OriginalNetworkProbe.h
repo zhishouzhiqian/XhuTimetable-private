@@ -36,6 +36,8 @@ NSString *CampusOriginalLoginBody(NSDictionary *info, NSDictionary *risk, NSDict
 NSString *CampusOriginalAccountAPI(CampusOriginalPurpose purpose);
 NSString *CampusOriginalReadBody(CampusOriginalPurpose purpose, NSDictionary *device);
 NSString *CampusOriginalAccountShape(NSData *body, CampusOriginalPurpose purpose);
+NSString *CampusOriginalMachineNumber(NSString *contents);
+NSArray *CampusOriginalReadDisplay(NSData *body, CampusOriginalPurpose purpose);
 NSURLRequest *CampusOriginalAccountRequest(NSDictionary *identity, NSString *time, NSString *body,
     NSDictionary *factors, NSDictionary *session, CampusOriginalPurpose purpose,
     NSString *(^encode)(NSString *), NSString *__autoreleasing *reason);
@@ -45,6 +47,7 @@ void CampusOriginalAccountSend(NSURLRequest *request, CampusOriginalPurpose purp
     void (^completion)(NSDictionary *, NSDictionary *));
 #ifndef CAMPUS_ORIGINAL_PROBE_TEST
 @class UIViewController;
+void CampusOriginalPresentReadResults(UIViewController *parent, NSArray *rows, void (^clear)(void));
 void CampusOriginalPresentAuthorization(UIViewController *parent, NSString *appKey,
     void (^completion)(NSString *, NSString *));
 #endif

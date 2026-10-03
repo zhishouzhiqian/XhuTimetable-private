@@ -150,7 +150,10 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
         if ([ret isKindOfClass:NSArray.class] && [ret count] <= 16) {
             for (id item in ret) {
                 NSString *code = ProbeText(item, 4096) ? [[item componentsSeparatedByString:@"::"] firstObject] : nil;
-                NSString *safe = code && [known containsObject:code] ? code : @"UNKNOWN_CODE";
+                // 未枚举的业务错误只允许短的全大写错误名称；正文及未知自由文本继续隐藏。
+                NSRegularExpression *identifier = [NSRegularExpression regularExpressionWithPattern:@"^(FAIL_(SYS|BIZ)|BIZ|ERROR)_[A-Z_]{1,72}$" options:0 error:nil];
+                BOOL safeIdentifier = code && code.length <= 96 && [identifier numberOfMatchesInString:code options:0 range:NSMakeRange(0, code.length)] == 1;
+                NSString *safe = code && ([known containsObject:code] || safeIdentifier) ? code : @"UNKNOWN_CODE";
                 [codes addObject:safe];
                 allSuccess = allSuccess && [safe isEqualToString:@"SUCCESS"];
             }
@@ -211,6 +214,11 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
     NSDictionary *evidence = nil;
     if (self.accountCompletion && [result[@"success"] boolValue]) {
         evidence = CampusOriginalAccountEvidence(self.body, self.purpose);
+        if (evidence) {
+            NSMutableDictionary *privateResult = [evidence mutableCopy];
+            privateResult[@"display"] = CampusOriginalReadDisplay(self.body, self.purpose);
+            evidence = [privateResult copy];
+        }
         if (!evidence) {
             NSString *reason = self.purpose == CampusOriginalPurposeLogin ? @"returnValue.sid/hid 有效值未通过" :
                 self.purpose == CampusOriginalPurposeProfile ? @"资料 openUserId/phone 身份字段未通过" :
