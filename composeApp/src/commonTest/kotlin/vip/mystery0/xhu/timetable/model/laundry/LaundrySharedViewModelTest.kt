@@ -135,6 +135,14 @@ class LaundrySharedViewModelTest {
         assertNull(model.state.value.error)
     }
 
+    @Test fun paymentStageReportDoesNotBecomeGenericNetworkFailure() {
+        val model = model(FakeGateway().apply {
+            initializationError = LaundryPaymentException("实时报价：HTTP 200；业务码 FAIL_SYS_API_UNAUTHORIZED（正文隐藏）")
+        })
+        assertTrue(model.state.value.error!!.contains("实时报价"))
+        assertTrue(model.state.value.error!!.contains("FAIL_SYS_API_UNAUTHORIZED"))
+    }
+
     @Test fun ordinaryExceptionBodyIsNotShown() {
         val model = model(FakeGateway().apply { initializationError = IllegalStateException("private-token") })
         assertFalse(model.state.value.error!!.contains("private-token"))

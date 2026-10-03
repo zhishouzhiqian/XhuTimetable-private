@@ -39,6 +39,8 @@ object IosCampusClientBridge {
             error != null -> continuation.resumeWithException(
                 if (error.startsWith("CAMPUS_INIT_FAILED\n") && error.length <= 16384)
                     LaundryInitializationException(error.substringAfter('\n').trim())
+                else if (error.startsWith("CAMPUS_PAYMENT_FAILED\n") && error.length <= 16384)
+                    LaundryPaymentException(error.substringAfter('\n').trim())
                 else IllegalStateException(error)
             )
             result != null && result.length <= 262144 -> continuation.resume(result)
@@ -60,6 +62,12 @@ object IosCampusClientBridge {
     }
 }
 
+@Serializable private data class QuoteResult(val total: String, val discount: String, val pay: String,
+    val program: String, val device: String, val location: String)
+@Serializable private data class PaymentResult(val device: String, val location: String, val program: String,
+    val amount: String, val reference: String)
+@Serializable private data class CheckoutResult(val status: String)
+@Serializable private data class WechatResult(val uri: String)
 @Serializable private data class SessionResult(val present: Boolean)
 @Serializable private data class AuthorizationResult(val url: String)
 @Serializable private data class DeviceResult(val resNo: String, val name: String, val location: String,
@@ -72,10 +80,10 @@ object IosCampusClientBridge {
     fun model() = LaundryOrder(name, program, location, status, running, seconds, reference, completed, waitingForDevice)
 }
 
-/** 原配载体的查询客户端：复用安卓的共享页面，付款尚未验收时明确禁用。 */
+/** 原配载体客户端：与安卓共用报价、付款、微信返回核验和订单页面。 */
 private class IosCampusLaundryClient : IosLaundryLoginGateway {
     private val json = Json
-    override val supportsPayment = false
+    override val supportsPayment = true
     private fun payload(key: String, value: String) = buildJsonObject { put(key, value) }.toString()
     override suspend fun initialize() { IosCampusClientBridge.request("initialize") }
     override suspend fun hasSession() = json.decodeFromString<SessionResult>(IosCampusClientBridge.request("hasSession")).present
@@ -104,11 +112,26 @@ private class IosCampusLaundryClient : IosLaundryLoginGateway {
         check(rows.size <= 10)
         return rows.map { it.model() }
     }
-    override suspend fun pendingPayment(): LaundryPayment? = null
-    private fun unavailable(): Nothing = error("整合测试尚未开放下单付款。")
-    override suspend fun previewOrder(resNo: String, key: String): LaundryQuote = unavailable()
-    override suspend fun createConfirmedPayment(amount: String): Unit = unavailable()
-    override suspend fun paymentCheckout(): LaundryPaymentStatus = unavailable()
-    override suspend fun wechatPaymentUri(): String = unavailable()
-    override suspend fun acknowledgeTerminalPayment(): Unit = unavailable()
+    override suspend fun pendingPayment(): LaundryPayment? {
+        val raw = IosCampusClientBridge.request("pendingPayment")
+        if (json.parseToJsonElement(raw).jsonObject.isEmpty()) return null
+        val pending = json.decodeFromString<PaymentResult>(raw)
+        return LaundryPayment(pending.device, pending.location, pending.program, pending.amount, reference = pending.reference)
+    }
+    override suspend fun previewOrder(resNo: String, key: String): LaundryQuote {
+        val input = buildJsonObject { put("resNo", resNo); put("key", key) }.toString()
+        val quote = json.decodeFromString<QuoteResult>(IosCampusClientBridge.request("preview", input))
+        return LaundryQuote(quote.total, quote.discount, quote.pay)
+    }
+    override suspend fun createConfirmedPayment(amount: String) {
+        IosCampusClientBridge.request("createPayment", payload("amount", amount))
+    }
+    override suspend fun paymentCheckout(): LaundryPaymentStatus =
+        LaundryUiPolicy.paymentStatus(json.decodeFromString<CheckoutResult>(IosCampusClientBridge.request("paymentCheckout")).status)
+    override suspend fun wechatPaymentUri(): String {
+        val uri = json.decodeFromString<WechatResult>(IosCampusClientBridge.request("wechatPayment")).uri
+        check(LaundryAuthorizationPolicy.acceptsWechat(uri)) { "WECHAT_CHANNEL_UNAVAILABLE" }
+        return uri
+    }
+    override suspend fun acknowledgeTerminalPayment() { IosCampusClientBridge.request("acknowledgePayment") }
 }

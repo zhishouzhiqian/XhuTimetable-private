@@ -12,9 +12,19 @@ xcrun --sdk macosx clang -fobjc-arc -fblocks \
   -framework Foundation -framework CoreFoundation -o "$output/model-tests"
 "$output/model-tests"
 xcrun --sdk macosx clang -fobjc-arc -fblocks \
-  tools/ios-timetable-host/CampusTimetableClient.m tools/ios-timetable-host/CampusTimetableClientTests.m \
+  tools/ios-timetable-host/CampusTimetableClient.m tools/ios-timetable-host/CampusTimetablePayment.m \
+  tools/ios-timetable-host/CampusTimetablePaymentProtocol.m tools/ios-timetable-host/CampusTimetableClientTests.m \
   -framework Foundation -framework CoreFoundation -o "$output/client-tests"
 "$output/client-tests"
+# 付款测试使用固定桩及内存存储；不下单、不访问厂商组件或本人 Keychain。
+for suite in CampusTimetablePaymentProtocolTests CampusTimetablePaymentTests; do
+  xcrun --sdk macosx clang -fobjc-arc -fblocks -DCAMPUS_TIMETABLE_HOST=1 -DCAMPUS_ORIGINAL_PROBE_TEST=1 \
+    tools/ios-timetable-host/CampusTimetablePaymentProtocol.m tools/ios-timetable-host/CampusTimetablePayment.m \
+    tools/ios-original-probe/OriginalLoginProbe.m tools/ios-original-probe/OriginalDeviceProbe.m \
+    tools/ios-original-probe/OriginalNetworkProbe.m "tools/ios-timetable-host/$suite.m" \
+    -framework Foundation -framework CoreFoundation -o "$output/$suite"
+  "$output/$suite"
+done
 # Compose 的正式同步任务负责收集所有依赖资源，避免只复制本模块的图片。
 export BUILT_PRODUCTS_DIR="$PWD/$output"
 export UNLOCALIZED_RESOURCES_FOLDER_PATH=resources
@@ -28,7 +38,9 @@ sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
 sources=(tools/ios-original-probe/OriginalProbe.m tools/ios-original-probe/OriginalNetworkProbe.m \
   tools/ios-original-probe/OriginalDeviceProbe.m tools/ios-original-probe/OriginalLoginProbe.m \
   tools/ios-original-probe/OriginalAuthorizationView.m tools/ios-original-probe/OriginalReadResultsView.m \
-  tools/ios-timetable-host/CampusTimetableClient.m tools/ios-timetable-host/CampusTimetableModels.m)
+  tools/ios-timetable-host/CampusTimetableClient.m tools/ios-timetable-host/CampusTimetableModels.m \
+  tools/ios-timetable-host/CampusTimetablePayment.m tools/ios-timetable-host/CampusTimetablePaymentProtocol.m \
+  tools/ios-timetable-host/CampusTimetablePaymentStore.m)
 objects=()
 for source in "${sources[@]}"; do
   object="$output/objects/$(basename "${source%.m}").o"

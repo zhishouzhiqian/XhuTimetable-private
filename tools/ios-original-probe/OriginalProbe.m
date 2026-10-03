@@ -6,6 +6,9 @@
 #include <stdlib.h>
 #import "../../iosApp/iosApp/CampusMtopProbeInput.h"
 #import "OriginalNetworkProbe.h"
+#ifdef CAMPUS_TIMETABLE_HOST
+#import "../ios-timetable-host/CampusTimetablePaymentProtocol.h"
+#endif
 
 #ifndef CAMPUS_ORIGINAL_PROBE_TEST
 #import <UIKit/UIKit.h>
@@ -580,10 +583,11 @@ NSURLRequest *CampusTimetableAccountRequest(NSDictionary *context, NSDictionary 
     CampusOriginalPurpose purpose, NSDictionary *selection, NSString *code) {
     if (purpose != CampusOriginalPurposeLogin && purpose != CampusOriginalPurposeProfile &&
         purpose != CampusOriginalPurposeOrders && purpose != CampusOriginalPurposeHistory &&
-        purpose != CampusOriginalPurposeDeviceInfo && purpose != CampusOriginalPurposeOrderDetail) return nil;
+        purpose != CampusOriginalPurposeDeviceInfo && purpose != CampusOriginalPurposeOrderDetail && !CampusPaymentPurpose(purpose)) return nil;
     if (purpose != CampusOriginalPurposeLogin && !session) return nil;
     NSString *body = purpose == CampusOriginalPurposeLogin ? ProbeLoginBody(context, code, ^(NSString *a, NSString *b) {}) :
-        purpose == CampusOriginalPurposeProfile ? @"{\"platForm\":\"ios\"}" : CampusOriginalReadBody(purpose, selection);
+        purpose == CampusOriginalPurposeProfile ? @"{\"platForm\":\"ios\"}" :
+        CampusPaymentPurpose(purpose) ? CampusPaymentBody(purpose, selection) : CampusOriginalReadBody(purpose, selection);
     if (!body) return nil;
     return ProbeAccountRequest(context, body, session, purpose, ^(NSString *a, NSString *b) {});
 }

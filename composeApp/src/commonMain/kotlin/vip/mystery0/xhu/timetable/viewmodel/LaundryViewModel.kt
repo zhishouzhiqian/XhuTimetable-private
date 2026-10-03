@@ -375,6 +375,10 @@ open class LaundryViewModel(
 
     private fun handle(error: Exception) {
         if (error is CancellationException) throw error
+        if (error is LaundryPaymentException) {
+            _state.update { it.copy(error = error.report) }
+            return
+        }
         if (error is LaundryInitializationException) {
             _state.update { it.copy(error = "校园洗衣初始化未通过，请保留以下检查结果：\n${error.report}") }
             return
@@ -394,6 +398,8 @@ open class LaundryViewModel(
         }
         _state.update { it.copy(error = when (error.message) {
             "PRICE_CHANGED" -> "金额已变化，请刷新报价后重新确认。"
+            "PAYMENT_STORAGE_FAILED" -> "无法安全保存付款记录，已停止下单。请检查应用签名及存储后重试。"
+            "QUOTE_AMOUNT_INVALID", "QUOTE_REQUIRED" -> "报价未通过核验，请刷新报价后重试。"
             "CREATE_UNCERTAIN" -> "订单结果待确认，请稍后查询，不会重复下单。"
             "PAYMENT_ACCOUNT_MISMATCH" -> "有另一账号的未完成订单，请使用原账号登录。"
             "PAYMENT_PENDING" -> "请先处理未完成的订单。"

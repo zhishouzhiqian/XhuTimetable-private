@@ -17,7 +17,9 @@ typedef NS_ENUM(NSInteger, CampusOriginalPurpose) {
     CampusOriginalPurposeConfig, CampusOriginalPurposeRegister, CampusOriginalPurposeReuse,
     CampusOriginalPurposeLogin, CampusOriginalPurposeProfile, CampusOriginalPurposeOrders,
     CampusOriginalPurposeHistory, CampusOriginalPurposeBuildings, CampusOriginalPurposeDevices,
-    CampusOriginalPurposeDeviceInfo, CampusOriginalPurposeOrderDetail
+    CampusOriginalPurposeDeviceInfo, CampusOriginalPurposeOrderDetail,
+    CampusOriginalPurposeRender, CampusOriginalPurposeSequence, CampusOriginalPurposeCreate,
+    CampusOriginalPurposeCheckout, CampusOriginalPurposePaymethod
 };
 FOUNDATION_EXPORT NSString *const CampusOriginalRegisterAPI;
 NSString *CampusOriginalRegistrationBody(NSString *utdid, NSString *platform, NSString *mac);

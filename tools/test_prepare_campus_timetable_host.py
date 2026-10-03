@@ -67,7 +67,8 @@ class TimetableHostTests(unittest.TestCase):
             updated = plistlib.loads(archive.read(app + "Info.plist"))
             self.assertEqual(updated["CFBundleIdentifier"], metadata["CFBundleIdentifier"])
             self.assertEqual(updated["CFBundleDisplayName"], "西瓜课表（校园整合测试）")
-            self.assertFalse(updated["CampusTimetableHost"]["paymentEnabled"])
+            self.assertIs(updated["CampusTimetableHost"]["paymentEnabled"], True)
+            self.assertEqual(updated["CampusTimetableHost"]["version"], 2)
             self.assertIs(updated["CADisableMinimumFrameDurationOnPhone"], True)
             course_info = Path(__file__).resolve().parents[1] / "iosApp/iosApp/Info.plist"
             self.assertIs(plistlib.loads(course_info.read_bytes())["CADisableMinimumFrameDurationOnPhone"], True)
@@ -81,6 +82,11 @@ class TimetableHostTests(unittest.TestCase):
         (self.build / host.LIBRARY).write_bytes(fixture(6))
         with self.assertRaisesRegex(ValueError, "旧诊断库"):
             host.create_artifact(self.build, self.root / "old.zip")
+
+    def test_reject_read_only_host_library(self):
+        (self.build / host.LIBRARY).write_bytes(fixture(6) + b"xhu-campus-timetable-host:1\x00")
+        with self.assertRaisesRegex(ValueError, "旧诊断库"):
+            host.create_artifact(self.build, self.root / "read-only.zip")
 
     def test_existing_output_never_removed(self):
         output = self.root / "existing.ipa"

@@ -12,7 +12,7 @@ import prepare_campus_original_probe as original
 
 FORMAT = "xhu-campus-timetable-host"
 LIBRARY = "CampusOriginalProbe.dylib"
-MARKER = b"xhu-campus-timetable-host:1\x00"
+MARKER = b"xhu-campus-timetable-host:2\x00"
 MAX_LIBRARY = 512 * 1024 * 1024
 MAX_RESOURCE = 64 * 1024 * 1024
 MAX_TOTAL = 768 * 1024 * 1024
@@ -122,7 +122,7 @@ def prepare(ipa, artifact, output):
             # 与正常课表宿主一致；Compose 严格启动检查要求布尔 true。
             metadata["CADisableMinimumFrameDurationOnPhone"] = True
             metadata["NSCameraUsageDescription"] = "扫描校园洗衣机二维码，查看设备程序与状态。"
-            metadata["CampusTimetableHost"] = {"version": 1, "artifactSHA256": digest(artifact.read_bytes()), "paymentEnabled": False}
+            metadata["CampusTimetableHost"] = {"version": 2, "artifactSHA256": digest(artifact.read_bytes()), "paymentEnabled": True}
             stream = output.open("xb")
             try:
                 with stream, zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as target:
@@ -138,7 +138,7 @@ def prepare(ipa, artifact, output):
                 output.unlink(missing_ok=True)
                 raise
     return {"format": FORMAT, "version": 1, "resources": len(files) - 1,
-            "note": "未签名整合测试副本；保留原 SDK 载体，需递归重签。只支持登录、扫码与订单查询。"}
+            "note": "未签名整合测试副本；保留原 SDK 载体，需递归重签。支持登录、扫码、订单查询与本人确认下单付款；付款记录存于 Keychain。"}
 
 
 def main():

@@ -1,8 +1,12 @@
 #import "CampusTimetableClient.h"
+#import "CampusTimetablePayment.h"
 #include <dispatch/dispatch.h>
 #import <CoreFoundation/CoreFoundation.h>
 
 // 测试只替换固定 SDK/网络边界，不加载厂商组件、不发送请求。
+NSDictionary *CampusPaymentLoad(void) { return @{}; }
+void CampusPaymentSave(NSDictionary *intent) { NSCAssert(NO, @"生命周期测试不应写付款意图"); }
+void CampusPaymentClear(void) { NSCAssert(NO, @"生命周期测试不应清付款意图"); }
 static NSArray *probeRows;
 static BOOL probeReady;
 static NSUInteger probeCalls;

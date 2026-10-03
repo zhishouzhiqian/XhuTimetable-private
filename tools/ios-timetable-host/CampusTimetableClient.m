@@ -1,6 +1,7 @@
 #import "CampusTimetableClient.h"
+#import "CampusTimetablePayment.h"
 
-__attribute__((visibility("default"))) const char *CampusTimetableHostVersion = "xhu-campus-timetable-host:1";
+__attribute__((visibility("default"))) const char *CampusTimetableHostVersion = "xhu-campus-timetable-host:2";
 
 void CampusOriginalProbeNetworkRun(NSDictionary *, NSString *, void (^)(NSArray *), void (^)(NSDictionary *), void (^)(NSArray *));
 NSURLRequest *CampusTimetableAccountRequest(NSDictionary *, NSDictionary *, CampusOriginalPurpose, NSDictionary *, NSString *);
@@ -30,11 +31,20 @@ static NSString *CampusInitializationReport(NSArray *rows) {
 @property(nonatomic, copy) NSDictionary *context;
 @property(nonatomic, copy) NSDictionary *session;
 @property(nonatomic) BOOL busy;
+@property(nonatomic, strong) CampusTimetablePayment *payment;
 @end
 
 @implementation CampusTimetableClient
 - (instancetype)init {
-    if ((self = [super init])) _queue = dispatch_queue_create("vip.mystery0.campus.client", DISPATCH_QUEUE_SERIAL);
+    if ((self = [super init])) {
+        _queue = dispatch_queue_create("vip.mystery0.campus.client", DISPATCH_QUEUE_SERIAL);
+        __weak CampusTimetableClient *client = self;
+        _payment = [[CampusTimetablePayment alloc] initWithQuery:^(CampusOriginalPurpose purpose, NSDictionary *selection, CampusPaymentCompletion completion) {
+            [client query:purpose selection:selection code:nil completion:^(NSDictionary *evidence, NSString *error) {
+                completion(evidence[@"payload"], error);
+            }];
+        } load:^NSDictionary *{ return CampusPaymentLoad(); } save:^(NSDictionary *intent) { CampusPaymentSave(intent); } clear:^{ CampusPaymentClear(); }];
+    }
     return self;
 }
 - (void)query:(CampusOriginalPurpose)purpose selection:(NSDictionary *)selection code:(NSString *)code
@@ -42,11 +52,21 @@ static NSString *CampusInitializationReport(NSArray *rows) {
     NSURLRequest *request = nil;
     @try { request = CampusTimetableAccountRequest(self.context, self.session, purpose, selection, code); }
     @catch (NSException *exception) { }
-    if (!request) { completion(nil, @"洗衣请求签名或参数校验失败。"); return; }
+    if (!request) {
+        completion(nil, CampusPaymentPurpose(purpose) ? @"CAMPUS_PAYMENT_FAILED\n付款请求：本次签名或固定正文契约未通过；未发送。" : @"洗衣请求签名或参数校验失败。");
+        return;
+    }
     CampusOriginalAccountSend(request, purpose, ^(NSDictionary *outcome, NSDictionary *evidence) {
         dispatch_async(self.queue, ^{
             if ([outcome[@"requiresLogin"] boolValue]) { self.session = nil; completion(nil, @"SESSION_EXPIRED"); }
-            else if (![outcome[@"success"] boolValue] || !evidence) completion(nil, @"洗衣查询失败，请检查网络后重试。");
+            else if (![outcome[@"success"] boolValue] || !evidence) {
+                if (CampusPaymentPurpose(purpose)) {
+                    NSString *stage = @{@(CampusOriginalPurposeRender): @"实时报价", @(CampusOriginalPurposeSequence): @"订单编号",
+                        @(CampusOriginalPurposeCreate): @"订单创建", @(CampusOriginalPurposeCheckout): @"收银台状态", @(CampusOriginalPurposePaymethod): @"微信渠道"}[@(purpose)];
+                    NSString *summary = [outcome[@"summary"] isKindOfClass:NSString.class] && [outcome[@"summary"] length] <= 1024 ? outcome[@"summary"] : @"响应校验未通过（正文隐藏）";
+                    completion(nil, [NSString stringWithFormat:@"CAMPUS_PAYMENT_FAILED\n%@：%@", stage, summary]);
+                } else completion(nil, @"洗衣查询失败，请检查网络后重试。");
+            }
             else completion(evidence, nil);
         });
     });
@@ -93,7 +113,7 @@ static NSString *CampusInitializationReport(NSArray *rows) {
                     });
                 return;
             }
-            if ([action isEqual:@"logout"]) { self.session = nil; finish(@{}, nil); return; }
+            if ([action isEqual:@"logout"]) { [self.payment resetQuote]; self.session = nil; finish(@{}, nil); return; }
             if ([action isEqual:@"hasSession"]) { finish(@{@"present": self.session ? @YES : @NO}, nil); return; }
             if (!self.context) { finish(nil, @"校园客户端尚未初始化。"); return; }
             if ([action isEqual:@"authorizationUrl"]) {
@@ -101,7 +121,7 @@ static NSString *CampusInitializationReport(NSArray *rows) {
                 finish(url ? @{@"url": url.absoluteString} : nil, nil); return;
             }
             if ([action isEqual:@"exchange"]) {
-                self.session = nil;
+                [self.payment resetQuote]; self.session = nil;
                 if ([input count] != 1 || ![input[@"code"] isKindOfClass:NSString.class]) { finish(nil, @"授权结果无效。"); return; }
                 [self query:CampusOriginalPurposeLogin selection:nil code:input[@"code"] completion:^(NSDictionary *evidence, NSString *error) {
                     if (evidence) self.session = @{@"sid": evidence[@"sid"], @"uid": evidence[@"uid"]};
@@ -109,6 +129,9 @@ static NSString *CampusInitializationReport(NSArray *rows) {
                 }]; return;
             }
             if (!self.session) { finish(nil, @"SESSION_EXPIRED"); return; }
+            if ([@[@"preview", @"pendingPayment", @"createPayment", @"paymentCheckout", @"wechatPayment", @"acknowledgePayment"] containsObject:action]) {
+                [self.payment perform:action input:input owner:self.session[@"uid"] completion:finish]; return;
+            }
             if ([action isEqual:@"verify"]) {
                 [self query:CampusOriginalPurposeProfile selection:nil code:nil completion:^(NSDictionary *evidence, NSString *error) { finish(evidence ? @{} : nil, error); }]; return;
             }

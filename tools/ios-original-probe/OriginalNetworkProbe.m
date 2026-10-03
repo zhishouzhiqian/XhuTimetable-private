@@ -228,6 +228,9 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
             NSString *reason = self.purpose == CampusOriginalPurposeLogin ? @"returnValue.sid/hid 有效值未通过" :
                 self.purpose == CampusOriginalPurposeProfile ? @"资料 openUserId/phone 身份字段未通过" :
                 [@"只读业务结构未通过：" stringByAppendingString:CampusOriginalAccountShape(self.body, self.purpose)];
+            #ifdef CAMPUS_TIMETABLE_HOST
+            if (self.purpose >= CampusOriginalPurposeRender && self.purpose <= CampusOriginalPurposePaymethod) reason = @"付款响应结构未通过";
+#endif
             result = @{@"success": @NO, @"summary": [NSString stringWithFormat:@"HTTP/业务码通过，但 %@（数据隐藏）", reason]};
         }
     }
