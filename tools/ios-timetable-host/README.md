@@ -29,3 +29,5 @@ python tools/prepare_campus_timetable_host.py --ipa <原天猫校园_5.7.2.ipa> 
 整合产物是动态库，默认公开所有全局符号会把 Kotlin 平台缓存中的未调用包装器也作为保留根。使用 `exports.list` 只公开外部启动入口和版本标记，配合 `-dead_strip` 清理未调用的代码。课表控制器通过 Swift 的 C 入口直接调用，避免依赖字符串反射来保留启动路径。真实可达依赖仍须在链接时解析，不使用缺失 API 的替身或动态查找来绕过失败。
 
 `test_campus_timetable_linker.sh` 在 macOS 检查三种情况：默认导出重现缺失包装器、限定导出后能实际调用启动工厂、缺失符号成为真实依赖时仍拒绝链接。整合库最终导出也逐项核对，链接图与导入清单供进一步定位。
+
+合成包的 `Info.plist` 必须保留课表宿主要求的布尔项 `CADisableMinimumFrameDurationOnPhone = true`。原校园主应用没有此项，不能仅保留原包配置；缺失会触发 Compose 的严格启动检查。打包测试同时检查原载体为 false 时的修正结果和正常课表宿主配置。[Compose 官方启动要求](https://kotlinlang.org/docs/multiplatform/compose-swiftui-integration.html)

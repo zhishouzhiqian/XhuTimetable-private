@@ -53,7 +53,7 @@ class TimetableHostTests(unittest.TestCase):
     def test_prepare_preserves_sdk_identity_and_both_inputs(self):
         source, output = self.root / "source.ipa", self.root / "result.ipa"
         app = "Payload/Campus.app/"
-        metadata = {"CFBundleExecutable": "Campus", "CFBundleIdentifier": "com.tmall.campus4iphone", "CFBundleShortVersionString": "5.7.2"}
+        metadata = {"CFBundleExecutable": "Campus", "CFBundleIdentifier": "com.tmall.campus4iphone", "CFBundleShortVersionString": "5.7.2", "CADisableMinimumFrameDurationOnPhone": False}
         with zipfile.ZipFile(source, "w") as archive:
             archive.writestr(app + "Info.plist", plistlib.dumps(metadata))
             archive.writestr(app + "Campus", fixture())
@@ -68,6 +68,9 @@ class TimetableHostTests(unittest.TestCase):
             self.assertEqual(updated["CFBundleIdentifier"], metadata["CFBundleIdentifier"])
             self.assertEqual(updated["CFBundleDisplayName"], "西瓜课表（校园整合测试）")
             self.assertFalse(updated["CampusTimetableHost"]["paymentEnabled"])
+            self.assertIs(updated["CADisableMinimumFrameDurationOnPhone"], True)
+            course_info = Path(__file__).resolve().parents[1] / "iosApp/iosApp/Info.plist"
+            self.assertIs(plistlib.loads(course_info.read_bytes())["CADisableMinimumFrameDurationOnPhone"], True)
             self.assertIn("NSCameraUsageDescription", updated)
             self.assertEqual(archive.read(app + "yw_1222.jpg"), b"main")
             self.assertEqual(archive.read(app + "compose-resources/course/files/test.json"), b'{"test":true}')

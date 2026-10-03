@@ -119,6 +119,8 @@ def prepare(ipa, artifact, output):
                 raise ValueError("课表资源与原载体条目冲突。")
             metadata = plistlib.loads(source.read(plist_name))
             metadata["CFBundleDisplayName"] = "西瓜课表（校园整合测试）"
+            # 与正常课表宿主一致；Compose 严格启动检查要求布尔 true。
+            metadata["CADisableMinimumFrameDurationOnPhone"] = True
             metadata["NSCameraUsageDescription"] = "扫描校园洗衣机二维码，查看设备程序与状态。"
             metadata["CampusTimetableHost"] = {"version": 1, "artifactSHA256": digest(artifact.read_bytes()), "paymentEnabled": False}
             stream = output.open("xb")
