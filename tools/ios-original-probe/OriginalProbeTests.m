@@ -6,6 +6,9 @@
 NSArray *CampusOriginalProbeRun(NSDictionary *, NSString *, void (^)(NSArray *));
 void CampusOriginalNetworkProbeTests(void);
 NSURLRequest *CampusOriginalProbeTestRequest(NSDictionary *);
+NSURLRequest *CampusOriginalProbeTestDeviceRequest(NSDictionary *, NSDictionary *, NSString *, CampusOriginalPurpose);
+NSArray *CampusOriginalProbeTestCredentials(NSDictionary *, NSDictionary *);
+void CampusOriginalDeviceProbeTests(void);
 @protocol ISecurityGuardOpenUnifiedSecurity <NSObject>
 @end
 static BOOL ProbeTestFailure;
@@ -14,6 +17,8 @@ static NSArray *ProbeTestPreviousFields;
 static NSString *ProbeTestPreviousRequest;
 static NSUInteger ProbeTestConfigSignCalls;
 static NSUInteger ProbeTestLegacyIDCalls, ProbeTestDeviceMode, ProbeTestMtopReadCount;
+static NSUInteger ProbeTestCredentialMode, ProbeTestWUACalls, ProbeTestRegisterSignCalls;
+static NSString *ProbeTestLastSignInput;
 
 static NSString *ResultForStep(NSArray *rows, NSString *step) {
     // 同一步会先追加“正在执行”，再追加最终结果；断言必须读取最后一条。
@@ -49,13 +54,22 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
 }
 - (NSDictionary *)getSecurityFactors:(NSDictionary *)parameters error:(NSError **)error {
     BOOL config = [parameters[@"api"] isEqualToString:CampusOriginalConfigAPI];
+    BOOL registration = [parameters[@"api"] isEqualToString:CampusOriginalRegisterAPI];
     NSCAssert([parameters[@"appkey"] isEqualToString:@"TEST_APPKEY_MUST_NOT_APPEAR"] &&
-        (config || [parameters[@"api"] isEqualToString:@"mtop.sys.newdeviceid"]) &&
+        (config || registration || [parameters[@"api"] isEqualToString:@"mtop.sys.newdeviceid"]) &&
         [parameters[@"useWua"] isEqual:@NO] && [parameters[@"env"] isEqual:@0] &&
         [parameters[@"extendParas"] isEqual:@{}], @"签名参数改变");
     NSArray *fields = [parameters[@"data"] componentsSeparatedByString:@"&"];
     NSCAssert(fields.count == 22 && [fields[3] isEqualToString:parameters[@"appkey"]] &&
         [fields[5] length] == 10 && [fields[4] length] == 32, @"MTOP 字段契约不符");
+    ProbeTestLastSignInput = parameters[@"data"];
+    registration = registration || ([parameters[@"api"] isEqual:CampusOriginalRegisterAPI.lowercaseString] &&
+        [fields[9] isEqual:@"test@campus_iPhone_5.7.2"]);
+    if (registration) {
+        ProbeTestRegisterSignCalls++;
+        NSCAssert([fields[6] isEqual:CampusOriginalRegisterAPI.lowercaseString] && [fields[7] isEqual:@"4.0"] && [fields[10] isEqual:@""], @"注册 API、版本或设备 ID 错误");
+        return @{@"x-sign": @"SECRET_REG_SIGN", @"x-mini-wua": @"SECRET_REG_MINI", @"x-umt": @"SECRET_REG_UMT", @"x-sgext": @"SECRET_REG_SGEXT"};
+    }
     if (config) {
         ProbeTestConfigSignCalls++;
         NSCAssert([fields[4] isEqualToString:@"99914b932bd37a50b983c5e7c90ae93b"] &&
@@ -86,16 +100,43 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
     return @{@"x-sign": sign, @"x-mini-wua": @"SECRET_MINI", @"x-umt": @"SECRET_UMT", @"x-sgext": @"SECRET_SGEXT"};
 }
 @end
+@interface ProbeOriginalUMID : NSObject
+- (NSString *)getSecurityToken;
+@end
+@implementation ProbeOriginalUMID
+- (NSString *)getSecurityToken {
+    if (ProbeTestCredentialMode == 1) @throw [NSException exceptionWithName:@"SECRET_NAME" reason:@"SECRET_BODY" userInfo:nil];
+    return @"SECRET_CONFIG_UMT";
+}
+@end
+@interface ProbeOriginalBody : NSObject
+- (NSString *)getSecurityBodyDataEx:(NSString *)data appKey:(NSString *)key authCode:(NSString *)auth
+    extendParam:(NSDictionary *)parameters flag:(int)flag env:(int)env error:(NSError **)error;
+@end
+@implementation ProbeOriginalBody
+- (NSString *)getSecurityBodyDataEx:(NSString *)data appKey:(NSString *)key authCode:(NSString *)auth
+    extendParam:(NSDictionary *)parameters flag:(int)flag env:(int)env error:(NSError **)error {
+    NSCAssert(data.length == 13 && [key isEqual:@"TEST_APPKEY_MUST_NOT_APPEAR"] && !auth && !parameters && flag == 4 && env == 0,
+        @"WUA 的毫秒时间、默认参数或 int ABI 改变");
+    ProbeTestWUACalls++;
+    if (ProbeTestCredentialMode == 2) *error = [NSError errorWithDomain:@"SECRET_DOMAIN" code:777 userInfo:@{NSLocalizedDescriptionKey:@"SECRET_BODY"}];
+    return ProbeTestCredentialMode == 3 ? (id)@123 : @"SECRET_FULL_WUA";
+}
+@end
 @interface OpenSecurityGuardManager : NSObject
 + (instancetype)getInstance;
 - (NSString *)getSDKVersion;
 - (id)getStaticDataStoreComp;
 - (id)getInterface:(Protocol *)protocol;
+- (id)getUMIDComp;
+- (id)getSecurityBodyComp;
 @end
 @implementation OpenSecurityGuardManager
 + (instancetype)getInstance { return [[self alloc] init]; }
 - (NSString *)getSDKVersion { return @"6.8.260603"; }
 - (id)getStaticDataStoreComp { return [[ProbeOriginalStore alloc] init]; }
+- (id)getUMIDComp { return [[ProbeOriginalUMID alloc] init]; }
+- (id)getSecurityBodyComp { return [[ProbeOriginalBody alloc] init]; }
 - (id)getInterface:(Protocol *)protocol {
     NSCAssert(protocol == @protocol(ISecurityGuardOpenUnifiedSecurity), @"协议改变");
     return [[ProbeOriginalUnified alloc] init];
@@ -155,6 +196,27 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
 + (NSString *)urlEncodeString:(NSString *)value {
     return [value stringByAddingPercentEncodingWithAllowedCharacters:
         [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"]];
+}
+@end
+
+// macOS 桩不链接 UIKit，仅复现已核对的分类方法类型。
+@interface UIDevice : NSObject
++ (NSString *)tbsdkPlatform;
++ (NSString *)tbsdkMacaddress;
+@end
+@implementation UIDevice
++ (NSString *)tbsdkPlatform { return @"test-platform"; }
++ (NSString *)tbsdkMacaddress { return @"02:00:00:00:00:00"; }
+@end
+@interface MtopExtRequest : NSObject
+@property(nonatomic, copy) NSString *apiName;
+- (instancetype)initWithApiName:(NSString *)api apiVersion:(NSString *)version;
+@end
+@implementation MtopExtRequest
+- (instancetype)initWithApiName:(NSString *)api apiVersion:(NSString *)version {
+    self = [super init];
+    if (self) { NSCAssert([version isEqual:@"4.0"], @"注册版本错误"); self.apiName = api.lowercaseString; }
+    return self;
 }
 @end
 
@@ -225,6 +287,39 @@ int main(void) {
             NSCAssert(ProbeTestConfigSignCalls == 1 && ProbeTestLegacyIDCalls == 0, @"设备预检失败仍签名或使用错误替代入口");
         }
         ProbeTestDeviceMode = 0;
+        NSDictionary *identity = @{@"x-appkey": @"TEST_APPKEY_MUST_NOT_APPEAR", @"x-utdid": @"AAAAAAAAAAAAAAAAAAAAAAAA",
+            @"x-ttid": @"test@campus_iPhone_5.7.2", @"x-mini-wua": @"SECRET_CONFIG_MINI", @"x-umt": @"SECRET_CONFIG_UMT"};
+        NSDictionary *credentialsContext = @{@"openManager": [[OpenSecurityGuardManager alloc] init]};
+        for (NSUInteger mode = 0; mode <= 3; mode++) {
+            ProbeTestCredentialMode = mode;
+            NSArray *results = CampusOriginalProbeTestCredentials(credentialsContext, identity);
+            NSCAssert(![results.description containsString:@"SECRET_"] && ![results.description containsString:@"TEST_APPKEY"], @"凭据报告泄露值");
+            NSCAssert(mode == 2 ? [ResultForStep(results, @"候选完整 WUA") containsString:@"777"] :
+                mode == 3 ? [ResultForStep(results, @"候选完整 WUA") containsString:@"类型不符"] :
+                [ResultForStep(results, @"候选完整 WUA") containsString:@"非空值"], @"WUA 成败判定错误或 UMID 异常阻断 WUA");
+        }
+        NSCAssert(ProbeTestWUACalls == 4, @"独立凭据诊断未完整执行");
+        NSURLRequest *registration = CampusOriginalProbeTestDeviceRequest(context, identity, nil, CampusOriginalPurposeRegister);
+        NSCAssert(registration && ProbeTestRegisterSignCalls == 1, @"原设备入口不能构造注册请求");
+        NSURLComponents *registrationURL = [NSURLComponents componentsWithURL:registration.URL resolvingAgainstBaseURL:YES];
+        NSString *registrationBody = [[registrationURL.percentEncodedQuery substringFromIndex:5] stringByRemovingPercentEncoding];
+        NSData *registrationBytes = [registrationBody dataUsingEncoding:NSUTF8StringEncoding];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        unsigned char md5Bytes[CC_MD5_DIGEST_LENGTH]; CC_MD5(registrationBytes.bytes, (CC_LONG)registrationBytes.length, md5Bytes);
+#pragma clang diagnostic pop
+        NSMutableString *md5 = [NSMutableString string];
+        for (NSUInteger i = 0; i < sizeof(md5Bytes); i++) [md5 appendFormat:@"%02x", md5Bytes[i]];
+        NSCAssert([[[ProbeTestLastSignInput componentsSeparatedByString:@"&"] objectAtIndex:4] isEqual:md5], @"签名与线路 JSON 正文摘要不同");
+        NSString *deviceID = [@"D" stringByPaddingToLength:44 withString:@"D" startingAtIndex:0];
+        NSURLRequest *reused = CampusOriginalProbeTestDeviceRequest(context, identity, deviceID, CampusOriginalPurposeReuse);
+        NSCAssert(reused && [[[ProbeTestLastSignInput componentsSeparatedByString:@"&"] objectAtIndex:10] isEqual:deviceID] &&
+            [[reused valueForHTTPHeaderField:@"x-devid"] isEqual:deviceID], @"返回设备 ID 没有同时参与签名与请求头");
+        ProbeTestDeviceMode = 1;
+        NSCAssert(CampusOriginalProbeTestDeviceRequest(context, identity, nil, CampusOriginalPurposeRegister) == nil &&
+            ProbeTestRegisterSignCalls == 1, @"跨阶段标识变化没有阻断注册签名");
+        ProbeTestDeviceMode = 0;
+        CampusOriginalDeviceProbeTests();
         CampusOriginalNetworkProbeTests();
         puts("原配诊断原生桩测试通过；未执行厂商组件。");
     }

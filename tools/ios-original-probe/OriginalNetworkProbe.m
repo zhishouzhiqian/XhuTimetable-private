@@ -156,7 +156,8 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
 @property(nonatomic) NSInteger status;
 @property(nonatomic) BOOL redirected;
 @property(nonatomic) BOOL oversized;
-@property(nonatomic, copy) void (^completion)(NSDictionary *);
+@property(nonatomic) CampusOriginalPurpose purpose;
+@property(nonatomic, copy) void (^completion)(NSDictionary *, NSString *);
 @end
 
 @implementation CampusOriginalConfigTransport
@@ -190,11 +191,16 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
 }
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
     NSDictionary *result = CampusOriginalConfigOutcome(self.status, self.body, error.code, self.redirected, self.oversized);
+    NSString *deviceID = nil;
+    if (self.purpose == CampusOriginalPurposeRegister && [result[@"success"] boolValue]) {
+        deviceID = CampusOriginalRegisteredDevice(self.body);
+        if (!deviceID) result = @{@"success": @NO, @"summary": @"HTTP/业务码通过，但 data.device_id 缺失或形状未通过；不复用"};
+    }
     [self.body setLength:0];
-    void (^completion)(NSDictionary *) = self.completion;
+    void (^completion)(NSDictionary *, NSString *) = self.completion;
     self.completion = nil;
     [session finishTasksAndInvalidate];
-    if (completion) completion(result);
+    if (completion) completion(result, deviceID);
 }
 @end
 
@@ -216,14 +222,21 @@ BOOL CampusOriginalConfigRequestInScope(NSURLRequest *request) {
 }
 
 void CampusOriginalConfigSend(NSURLRequest *request, void (^completion)(NSDictionary *)) {
-    if (!CampusOriginalConfigRequestInScope(request)) {
-        completion(@{@"success": @NO, @"summary": @"发送前范围核对失败；未发送"}); return;
+    CampusOriginalDeviceSend(request, CampusOriginalPurposeConfig, ^(NSDictionary *result, NSString *deviceID) {
+        completion(result);
+    });
+}
+
+void CampusOriginalDeviceSend(NSURLRequest *request, CampusOriginalPurpose purpose,
+                              void (^completion)(NSDictionary *, NSString *)) {
+    if (!CampusOriginalDeviceRequestInScope(request, purpose)) {
+        completion(@{@"success": @NO, @"summary": @"发送前范围核对失败；未发送"}, nil); return;
     }
     NSString *time = [request valueForHTTPHeaderField:@"x-t"];
     if (time.length != 10 ||
         [time rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet].location != NSNotFound ||
         fabs(NSDate.date.timeIntervalSince1970 - time.doubleValue) > 120) {
-        completion(@{@"success": @NO, @"summary": @"请求时间过期或无效；未发送"}); return;
+        completion(@{@"success": @NO, @"summary": @"请求时间过期或无效；未发送"}, nil); return;
     }
     NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
     config.HTTPShouldSetCookies = NO;
@@ -238,6 +251,7 @@ void CampusOriginalConfigSend(NSURLRequest *request, void (^completion)(NSDictio
     config.protocolClasses = @[];
     CampusOriginalConfigTransport *delegate = [[CampusOriginalConfigTransport alloc] init];
     delegate.body = [NSMutableData data];
+    delegate.purpose = purpose;
     delegate.completion = completion;
     NSOperationQueue *queue = [[NSOperationQueue alloc] init];
     queue.maxConcurrentOperationCount = 1;

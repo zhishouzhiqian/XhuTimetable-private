@@ -1,6 +1,6 @@
 # 校园原配本地诊断
 
-本实验使用用户已有的校园 5.7.2 破壳 IPA 中的原 SDK 和原资源，不依赖下载独立配套 SDK。用户已在 LiveContainer 中验证 6.8.260603 初始化成功，诊断版本 2 两次签名均具备四个必需字段，改变正文后 x-sign 不同。尚未将签名能力接入课表。诊断版本 3 增加手动匿名配置联网检查。
+本实验使用用户已有的校园 5.7.2 破壳 IPA 中的原 SDK 和原资源，不依赖下载独立配套 SDK。用户已在 LiveContainer 中验证 6.8.260603 初始化成功，诊断版本 2 两次签名均具备四个必需字段，改变正文后 x-sign 不同。版本 5 用户报告匿名配置查询 HTTP 200 / SUCCESS，原 UTDID、编码和请求一致性预检全部通过。尚未将签名能力接入课表。版本 6 扩展为设备注册与返回 ID 复用的综合检查。
 
 ## 用户需要构建的部分
 
@@ -31,17 +31,17 @@ Windows 可完成打包；iOS 诊断库需要 macOS/Xcode 编译。若只拿到�
 4. 点击“开始本地检查”，复制报告。不要登录、扫码或付款；诊断页没有这些操作入口。
 5. 每个新进程只运行一次。超过 45 秒未返回，保留当前报告并彻底关闭应用；超时提示不代表 SDK 线程已被取消。
 
-### 诊断版本 3 的联网检查
+### 当前版本 6 的联网检查
 
-启动不会自动发送诊断请求。离线按钮仍要求断网。要执行新的联网阶段，请连接网络，手动点击“联网检查（仅匿名配置）”；每个进程只创建一个检查任务，不能在同一进程重试。不要以飞行模式下的网络错误判断签名失败。
+启动不会自动发送诊断请求。离线按钮仍要求断网。联网阶段连接网络，手动点击“联网综合检查（配置/注册/复用）”，依次检查匿名配置、设备注册与返回 ID 复用，最多三个任务，每个进程只执行一次综合检查。独立 WUA/UMID 结果同时保留。不要以飞行模式下的网络错误判断签名失败；综合阶段超过 90 秒会显示超时提示，SDK 调用不会因此自动取消。
 
 联网阶段先重新核对资源及初始化。版本 5 使用原 MTOP 的 TBSDKNetworkSDKUtil.utdid，并对照 UTDevice.utdid；不使用随机标识或 uniqueGlobalDeviceIdentifier。请求 AppKey 来自原 AppInfo.appKey，报告仅比较其与索引 0 是否相同。TTID 按原 TCSyncLauncher.setupMTOP 的形式，以 AppInfo.channel、bundleName、version 组装 `%@@%@_iPhone_%@`。原主程序 TBSDKRequest.setHTTPRequestHeader 使用 x-pv=6.3；编码由原 TBSDKMTOPEnvConfig.urlEncodeString: 执行，并用合成特殊字符向量及逐项解码一致性验证。
 
-只允许 HTTPS GET 到 acs.m.taobao.com 的 mtop.tmall.campus.guide.advertising.config.list/1.0，正文固定为 `{}`。秒级时间、UTDID、TTID、AppKey 和正文在签名前固定，签名使用同一份输入；新生成的四个安全字段检查完整后只编码一次。不使用 Cookie、x-sid、x-devid、账号、旧抓包签名或历史注册值。此精简请求尚未完成服务端验收，不能称为已经验证的完整 iOS MTOP 客户端。
+只允许 HTTPS GET 到 acs.m.taobao.com 的匿名配置接口和 mtop.sys.newdeviceid/4.0。配置正文固定 `{}`；注册正文按下文十个原 iOS 字段组装。秒级时间、UTDID、TTID、AppKey 和正文在每次签名前固定，新生成的四个安全字段检查完整后只编码一次。只有第三阶段使用本次返回的 x-devid；不用 Cookie、x-sid、账号、旧抓包签名或历史注册值。版本 5 的匿名配置已有服务端成功报告，注册与复用仍待验证，不能称为完整 iOS MTOP 客户端。
 
 请求使用 ephemeral NSURLSession，关闭 Cookie、凭据存储和缓存，拒绝跳转，保持系统 TLS 校验。请求/资源超时为 15/20 秒，响应最大 1 MiB。没有应用层重试或后续请求；系统传输层的连接处理由 NSURLSession 管理，不能据此保证底层只有一次连接尝试。原程序加载期代码和第三方运行时修改仍不在诊断控制范围内。
 
-报告仅展示 HTTP 状态、白名单业务码、固定错误说明及数字错误码，不展示 URL、头值、设备标识、响应正文或响应数据。只有 HTTP 200 且非空 ret 列表全部为 SUCCESS 才通过；未知业务码统一显示 UNKNOWN_CODE。不跟随验证码/风控跳转，不继续设备注册、短信、登录、订单或付款。设备注册应在匿名查询成功后单独验证。
+报告仅展示 HTTP 状态、白名单业务码、固定错误说明及数字错误码，不展示 URL、头值、设备标识、响应正文或响应数据。只有 HTTP 200 且非空 ret 列表全部为 SUCCESS 才通过；未知业务码统一显示 UNKNOWN_CODE。注册还必须获得有效 data.device_id 才能复用。不跟随验证码/风控跳转，不发送短信、不登录、不下单或付款。
 
 ## 启动改动与边界
 
@@ -93,3 +93,22 @@ macOS 原生桩测试覆盖默认索引/认证参数、空初始化字典、AppK
 版本 5 改用上述原调用链，并批量报告字符/解码长度、两次读取稳定性、包装器与 UTDevice 一致性、五组编码向量、九个请求头回读及空正文一致性。长度可展示，设备值不展示；格式、不稳定或入口不一致仍阻断，不使用旧 HAR 或随机值替代。单个头字段预检失败时其它独立编码检查仍继续，最终构造门禁保持严格。此版本仍只发送手动匿名配置查询；尚未完成设备注册、设备 ID 复用或洗衣接入，不将独立标识生成等同于服务端注册成功。
 
 原生桩新增不同形状的旧入口、正确 MTOP 包装器与 UTDevice、无效格式、两次读取变化、双入口不一致以及 15 项编码预检回归，断言旧入口零调用，设备预检失败不签名；Windows 打包测试不执行这些原生桩，版本 5 原生编译和真机联网结果待验证。
+
+
+## 版本 6：注册、返回 ID 复用与本地凭据综合检查
+
+版本 5 已获用户真机报告：原 6.8 SDK 初始化、AppKey 对照、原 MTOP UTDID 24 字符/18 字节契约、两次读取与 UTDevice 对照、五个编码向量、九个请求头和空正文全部通过，匿名配置响应 HTTP 200 / SUCCESS。此结果证明本次匿名请求成功，不证明登录、设备注册或洗衣功能完成。
+
+版本 6 手动联网按钮最多执行三个串行 NSURLSession 任务：匿名配置基线 → mtop.sys.newDeviceId/4.0 设备注册 → 使用本次返回 data.device_id 重新签名的匿名配置。前一步失败就跳过依赖任务，不重试、不跟随跳转、不使用 Cookie、账号或登录会话。设备注册确实会请求服务端创建/返回标识；设备 ID 只保留在本次闭包内存，不写入原 SDK 状态，不宣称产生了新的物理设备。
+
+注册字段来自固定原 iOS 样本 getDeviceIDFromServer:：device_global_id、c0=apple、c1=UIDevice.tbsdkPlatform、c2=原 UTDID、c3=0987654321、c4=UIDevice.tbsdkMacaddress、c5=CPUID、c6=SDCARDID、new_id_rule=true、new_device=true；均为字符串。UIDevice(TBNewSDKIdentifierAddition) 的类方法元数据与外部绑定已核对。不复制 Android 的 bizId，也不使用随机 UUID 替代原设备入口。
+
+MtopExtRequest 的初始化实现会调用 lowercaseString；运行时仍用原 initWithApiName:apiVersion: 和 apiName getter 核对实际名称，再取原返回值用于签名；网关路径固定小写。正文只序列化一次，同一份 UTF-8 字节参与 MD5 和 URL 编码，发送前再核对回读正文。复用时同一返回 ID 同时进入签名串第 11 字段与编码后的 x-devid 请求头，重新生成时间和四个安全字段。每阶段重新读取原 UTDID，变化就停止。
+
+返回 ID 仅接受非空、最多 256 字符的有界安全字母表字符串，展示长度而不展示值。Android 样本的 44 字符长度不是已经验证的 iOS 契约，因此不以其作为必须长度。HTTP 200 和 SUCCESS 与 data.device_id 有效必须同时满足，才能进入复用阶段。
+
+独立本地检查读取 Open 管理器 getUMIDComp/getSecurityToken，不调用 UMID 初始化或注册；仅比较是否与本次 x-umt 相同。完整 WUA 使用 Open 安全体组件 getSecurityBodyDataEx:appKey:authCode:extendParam:flag:env:error:，核对对象参数、两个 int 参数与 NSError 指针类型，使用毫秒时间、原 AppKey、authCode=nil、extendParam=nil、flag=4、env=0。它只是登录用途的候选生成检查，不等同于原登录流程参数已核对或服务器已接受；只比较是否与 x-mini-wua 不同，不输出凭据。WUA/UMID 错误不阻断其余独立网络检查。
+
+新增原生桩检查注册字段、API 规范化、同一线路正文的 MD5、返回 ID 在签名与头中的一致性、跨阶段 UTDID 变化、越界/额外查询/错误方法/账号 Cookie 拒绝、返回 ID JSON 解析、WUA int ABI 与默认参数、错误码脱敏，以及 UMID 异常时继续 WUA。发送测试只使用建连前必须拒绝的请求，测试不访问服务端。
+
+版本 6 仍需用户在 ios-campus-original-probe 工作流构建新的 CampusOriginalProbe.dylib。Windows 只运行 Python 打包回归和 Bash 语法检查，没有运行 Xcode 原生编译或这些原生桩；真实设备注册与 ID 复用结果待新 IPA 的真机报告。旧版本文段中的联网边界对应当时的版本，当前界面以版本 6 的三个任务说明为准。

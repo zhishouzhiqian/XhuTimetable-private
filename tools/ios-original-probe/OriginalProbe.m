@@ -116,7 +116,7 @@ static NSArray<NSDictionary<NSString *, NSString *> *> *ProbeRun(
                 [NSString stringWithFormat:@"失败（SDK 错误码 %ld）", (long)error.code] : @"失败；未提供错误码");
         } else emit(@"统一签名初始化", @"方法类型不匹配；未调用");
         if (!signLocally) {
-            if (initialized && appKey.length && context) *context = @{@"appKey": appKey, @"unified": unified};
+            if (initialized && appKey.length && context) *context = @{@"appKey": appKey, @"unified": unified, @"openManager": openManager};
             return [rows copy];
         }
         SEL factorsSelector = NSSelectorFromString(@"getSecurityFactors:error:");
@@ -256,6 +256,133 @@ NSURLRequest *CampusOriginalProbeTestRequest(NSDictionary *context) {
 }
 #endif
 
+static NSDictionary *ProbeRequestIdentity(NSURLRequest *request) {
+    NSMutableDictionary *identity = [NSMutableDictionary dictionary];
+    for (NSString *key in @[@"x-appkey", @"x-utdid", @"x-ttid", @"x-mini-wua", @"x-umt"]) {
+        NSString *value = [request valueForHTTPHeaderField:key].stringByRemovingPercentEncoding;
+        if (!value.length) return nil;
+        identity[key] = value;
+    }
+    return identity;
+}
+
+static void ProbeLocalCredentials(NSDictionary *context, NSDictionary *identity,
+                                  void (^emit)(NSString *, NSString *)) {
+    // 只调用本地 getter 与生成方法；不调用 UMID 初始化/注册或登录接口。
+    @try {
+        id manager = context[@"openManager"];
+        SEL getUMID = NSSelectorFromString(@"getUMIDComp");
+        id umid = ProbeMethod(manager, getUMID, @[], NO) ? ((id (*)(id, SEL))objc_msgSend)(manager, getUMID) : nil;
+        SEL getToken = NSSelectorFromString(@"getSecurityToken");
+        emit(@"UMID 本地读取", @"正在执行本地 getter");
+        id token = ProbeMethod(umid, getToken, @[], NO) ? ((id (*)(id, SEL))objc_msgSend)(umid, getToken) : nil;
+        BOOL valid = [token isKindOfClass:NSString.class] && [token length] > 0;
+        emit(@"UMID 本地读取", valid ? @"返回非空值（不展示）；未调用 UMID 注册" : @"组件、方法类型或返回值未通过");
+        if (valid) emit(@"UMID 与签名 x-umt 对照", [token isEqual:identity[@"x-umt"]] ? @"相同；仅为本次本地对照" : @"不同；不能仅据此判定请求无效");
+    } @catch (NSException *exception) { emit(@"UMID 本地读取", @"发生异常（正文隐藏）；其它检查继续"); }
+    @try {
+        id manager = context[@"openManager"];
+        SEL getBody = NSSelectorFromString(@"getSecurityBodyComp");
+        id body = ProbeMethod(manager, getBody, @[], NO) ? ((id (*)(id, SEL))objc_msgSend)(manager, getBody) : nil;
+        SEL generate = NSSelectorFromString(@"getSecurityBodyDataEx:appKey:authCode:extendParam:flag:env:error:");
+        // 原 Open 接口 flag/env 为 32 位 int，不能改成 NSInteger。
+        if (!ProbeMethod(body, generate, @[@"@", @"@", @"@", @"@", @"i", @"i", @"^@"], NO)) {
+            emit(@"候选完整 WUA", @"组件或方法类型不匹配；未调用"); return;
+        }
+        NSError *error = nil;
+        NSString *milliseconds = [NSString stringWithFormat:@"%lld", (long long)(NSDate.date.timeIntervalSince1970 * 1000)];
+        emit(@"候选完整 WUA", @"正在执行本地生成；不调用登录接口");
+        id value = ((id (*)(id, SEL, id, id, id, id, int, int, NSError *__autoreleasing *))objc_msgSend)(
+            body, generate, milliseconds, identity[@"x-appkey"], nil, nil, 4, 0, &error);
+        BOOL valid = !error && [value isKindOfClass:NSString.class] && [value length] > 0;
+        emit(@"候选完整 WUA", valid ? @"本地返回非空值（不展示）；尚未验证登录接口接受性" : error ?
+            [NSString stringWithFormat:@"失败（SDK 错误码 %ld）", (long)error.code] : @"返回空值或类型不符");
+        if (valid) emit(@"WUA 与 x-mini-wua 对照", [value isEqual:identity[@"x-mini-wua"]] ? @"相同；需继续核对用途" : @"不同；不能互相替代");
+    } @catch (NSException *exception) { emit(@"候选完整 WUA", @"发生异常（正文隐藏）；其它检查继续"); }
+}
+
+@protocol CampusOriginalRequestConstruction <NSObject>
+- (instancetype)initWithApiName:(NSString *)api apiVersion:(NSString *)version;
+@end
+
+static NSURLRequest *ProbeDeviceRequest(NSDictionary *context, NSDictionary *identity, NSString *deviceID,
+                                       CampusOriginalPurpose purpose, void (^emit)(NSString *, NSString *)) {
+    Class device = NSClassFromString(@"TBSDKNetworkSDKUtil");
+    SEL utdidSelector = NSSelectorFromString(@"utdid");
+    id current = ProbeMethod(device, utdidSelector, @[], NO) ? ((id (*)(id, SEL))objc_msgSend)(device, utdidSelector) : nil;
+    if (![identity[@"x-utdid"] isEqual:current]) { emit(@"跨阶段设备标识", @"发生变化或入口不可用；未发送"); return nil; }
+    NSString *body = @"{}", *api = CampusOriginalConfigAPI, *version = @"1.0";
+    if (purpose == CampusOriginalPurposeRegister) {
+        // 原程序 UIDevice(TBNewSDKIdentifierAddition) 两个类方法；不使用系统 UUID 替代。
+        Class profile = NSClassFromString(@"UIDevice");
+        SEL platform = NSSelectorFromString(@"tbsdkPlatform"), mac = NSSelectorFromString(@"tbsdkMacaddress");
+        if (!ProbeMethod(profile, platform, @[], NO) || !ProbeMethod(profile, mac, @[], NO)) {
+            emit(@"iOS 注册设备参数", @"原 UIDevice 分类入口未通过；未发送"); return nil;
+        }
+        body = CampusOriginalRegistrationBody(current, ((id (*)(id, SEL))objc_msgSend)(profile, platform),
+            ((id (*)(id, SEL))objc_msgSend)(profile, mac));
+        if (!body) { emit(@"iOS 注册设备参数", @"原入口返回值或注册正文未通过；未发送"); return nil; }
+        // 让原请求对象完成 API 名称处理，再读取其实际签名名称，避免猜测大小写。
+        Class requestClass = NSClassFromString(@"MtopExtRequest");
+        SEL initialize = NSSelectorFromString(@"initWithApiName:apiVersion:");
+        id<CampusOriginalRequestConstruction> original = [requestClass alloc];
+        if (!ProbeMethod(original, initialize, @[@"@", @"@"], NO)) {
+            emit(@"注册 API 原入口", @"请求对象入口不匹配；未发送"); return nil;
+        }
+        // init 方法按 ARC 的初始化所有权约定调用，不通过普通返回值 cast。
+        original = [original initWithApiName:CampusOriginalRegisterAPI apiVersion:@"4.0"];
+        SEL apiName = NSSelectorFromString(@"apiName");
+        id actualAPI = ProbeMethod(original, apiName, @[], NO) ? ((id (*)(id, SEL))objc_msgSend)(original, apiName) : nil;
+        if (![actualAPI isEqual:CampusOriginalRegisterAPI] && ![actualAPI isEqual:CampusOriginalRegisterAPI.lowercaseString]) {
+            emit(@"注册 API 原入口", @"原名称不符合已核对 API；未发送"); return nil;
+        }
+        api = actualAPI; version = @"4.0";
+        emit(@"注册 API 原入口", [api isEqual:CampusOriginalRegisterAPI] ? @"保留原 API 大小写；网关路径小写" : @"原请求对象已转小写；使用原返回值签名");
+        emit(@"iOS 注册设备参数", @"原 UIDevice 分类返回值；10 个原 iOS 字段；不展示标识或正文");
+    }
+    NSString *time = [NSString stringWithFormat:@"%lld", (long long)NSDate.date.timeIntervalSince1970];
+    NSMutableDictionary *headers = [@{@"x-t": time, @"x-ttid": identity[@"x-ttid"]} mutableCopy];
+    if (deviceID) headers[@"x-devid"] = deviceID;
+    NSString *input = CampusMtopProbeSignData([body dataUsingEncoding:NSUTF8StringEncoding], current,
+        identity[@"x-appkey"], api, version, headers);
+    id unified = context[@"unified"];
+    SEL sign = NSSelectorFromString(@"getSecurityFactors:error:");
+    if (!input || !ProbeMethod(unified, sign, @[@"@", @"^@"], NO)) { emit(@"阶段签名", @"输入或接口未通过；未发送"); return nil; }
+    NSError *error = nil;
+    emit(purpose == CampusOriginalPurposeRegister ? @"设备注册签名" : @"设备 ID 复用签名", @"正在生成本阶段安全字段");
+    id factors = ((id (*)(id, SEL, id, NSError *__autoreleasing *))objc_msgSend)(unified, sign,
+        @{@"appkey": identity[@"x-appkey"], @"data": input, @"api": api, @"useWua": @NO, @"env": @0,
+          @"extendParas": @{}, @"requestId": NSUUID.UUID.UUIDString}, &error);
+    if (!CampusMtopProbeFactorsComplete(factors, error)) {
+        emit(@"阶段签名", error ? [NSString stringWithFormat:@"失败（SDK 错误码 %ld）；未发送", (long)error.code] : @"四字段不完整；未发送"); return nil;
+    }
+    Class encoder = NSClassFromString(@"TBSDKMTOPEnvConfig"); SEL encode = NSSelectorFromString(@"urlEncodeString:");
+    if (!ProbeMethod(encoder, encode, @[@"@"], NO)) { emit(@"阶段编码", @"原入口未通过；未发送"); return nil; }
+    NSString *reason = nil;
+    NSURLRequest *request = CampusOriginalDeviceRequest(identity[@"x-appkey"], current, identity[@"x-ttid"], time,
+        body, factors, deviceID, purpose, ^NSString *(NSString *value) { return ((id (*)(id, SEL, id))objc_msgSend)(encoder, encode, value); }, &reason);
+    // 签名和 URL 必须复用同一份正文，不重新序列化 JSON。
+    NSURLComponents *url = request ? [NSURLComponents componentsWithURL:request.URL resolvingAgainstBaseURL:YES] : nil;
+    BOOL sameBody = [url.percentEncodedQuery hasPrefix:@"data="] &&
+        [[[url.percentEncodedQuery substringFromIndex:5] stringByRemovingPercentEncoding] isEqual:body];
+    BOOL sameID = deviceID ? [[request valueForHTTPHeaderField:@"x-devid"].stringByRemovingPercentEncoding isEqual:deviceID] &&
+        [[[input componentsSeparatedByString:@"&"] objectAtIndex:10] isEqual:deviceID] : YES;
+    emit(purpose == CampusOriginalPurposeRegister ? @"设备注册请求一致性" : @"设备 ID 复用请求一致性", request && sameBody && sameID ? @"正文 UTF-8/MD5 来源一致；编码回读一致；设备 ID 签名与请求头一致；四字段完整" :
+        [NSString stringWithFormat:@"%@；未发送", reason ?: @"正文或设备 ID 对照失败"]);
+    return sameBody && sameID ? request : nil;
+}
+
+#ifdef CAMPUS_ORIGINAL_PROBE_TEST
+NSURLRequest *CampusOriginalProbeTestDeviceRequest(NSDictionary *context, NSDictionary *identity, NSString *deviceID, CampusOriginalPurpose purpose) {
+    return ProbeDeviceRequest(context, identity, deviceID, purpose, ^(NSString *step, NSString *result) {});
+}
+NSArray *CampusOriginalProbeTestCredentials(NSDictionary *context, NSDictionary *identity) {
+    NSMutableArray *rows = [NSMutableArray array];
+    ProbeLocalCredentials(context, identity, ^(NSString *step, NSString *result) { [rows addObject:@{@"step": step, @"result": result}]; });
+    return rows;
+}
+#endif
+
 void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoot,
                                   void (^progress)(NSArray *), void (^completion)(NSArray *)) {
     NSDictionary *context = nil;
@@ -270,12 +397,37 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
         else emit(@"联网检查", @"初始化或资源未通过；未发送");
     } @catch (NSException *exception) { emit(@"联网准备", @"发生异常（正文隐藏）；未发送"); }
     if (!request) { completion([rows copy]); return; }
-    emit(@"联网范围", @"仅一次匿名公开配置任务；无 Cookie、账号或会话；禁止跳转，无应用层自动重试");
+    NSDictionary *identity = ProbeRequestIdentity(request);
+    if (!identity) { emit(@"阶段上下文", @"请求头回读失败；未发送"); completion([rows copy]); return; }
+    ProbeLocalCredentials(context, identity, emit);
+    emit(@"联网范围", @"最多三个串行任务：匿名配置、设备注册、带返回 ID 的配置；无 Cookie、账号或会话；禁止跳转，无应用层自动重试");
     CampusOriginalConfigSend(request, ^(NSDictionary *outcome) {
         emit(@"匿名配置响应", outcome[@"summary"]);
-        emit(@"验收结论", [outcome[@"success"] boolValue] ? @"本次匿名配置查询返回 SUCCESS；尚未验证设备注册、登录或洗衣" :
-            @"本次未通过；不继续注册或登录；不能单独据此定位签名、协议或网络原因");
-        completion([rows copy]);
+        if (![outcome[@"success"] boolValue]) {
+            emit(@"后续设备检查", @"跳过：匿名基线未通过；本地凭据检查结果已保留"); completion([rows copy]); return;
+        }
+        NSURLRequest *registration = nil;
+        @try { registration = ProbeDeviceRequest(context, identity, nil, CampusOriginalPurposeRegister, emit); }
+        @catch (NSException *exception) { emit(@"注册准备", @"发生异常（正文隐藏）；未发送"); }
+        if (!registration) { completion([rows copy]); return; }
+        CampusOriginalDeviceSend(registration, CampusOriginalPurposeRegister, ^(NSDictionary *registered, NSString *deviceID) {
+            emit(@"设备注册响应", registered[@"summary"]);
+            if (![registered[@"success"] boolValue] || !deviceID) {
+                emit(@"设备 ID 复用", @"跳过：注册或返回 ID 未通过"); completion([rows copy]); return;
+            }
+            emit(@"返回设备 ID", [NSString stringWithFormat:@"data.device_id：%lu 字符；有界字符串通过（值不展示）；仅保留本次内存，不写入原 SDK 状态", (unsigned long)deviceID.length]);
+            NSURLRequest *reuse = nil;
+            @try { reuse = ProbeDeviceRequest(context, identity, deviceID, CampusOriginalPurposeReuse, emit); }
+            @catch (NSException *exception) { emit(@"复用准备", @"发生异常（正文隐藏）；未发送"); }
+            if (!reuse) { completion([rows copy]); return; }
+            CampusOriginalDeviceSend(reuse, CampusOriginalPurposeReuse, ^(NSDictionary *reused, NSString *unused) {
+                emit(@"带设备 ID 配置响应", reused[@"summary"]);
+                emit(@"验收结论", [reused[@"success"] boolValue] ?
+                    @"匿名基线、设备注册、返回 ID 的重新签名配置均通过；尚未验证登录或洗衣" :
+                    @"匿名基线与注册通过，带 ID 的配置未通过；不能据此判定登录或洗衣可用");
+                completion([rows copy]);
+            });
+        });
     });
 }
 
@@ -312,14 +464,14 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     self.report = [[UITextView alloc] init];
     self.report.editable = NO;
     self.report.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.report.text = @"诊断版本：5\n当前运行专用 Application/AppDelegate\n\n离线检查：开启飞行模式并关闭 Wi-Fi。\n联网检查：先连接网络，再手动点击下方联网按钮，仅查询一次匿名公开配置，使用原设备标识但不展示，不登录、不注册设备、不下单。\n原二进制的类加载代码仍可能执行。\n\n每项检查每个进程只执行一次。";
+    self.report.text = @"诊断版本：6\n当前运行专用 Application/AppDelegate\n\n离线检查：开启飞行模式并关闭 Wi-Fi。\n联网检查：先连接网络，再手动点击下方联网按钮。检查本地 WUA/UMID，并依次查询匿名配置、注册设备、带返回设备 ID 再查配置；最多三个任务。不登录、不下单。\n原二进制的类加载代码仍可能执行。\n\n每项检查每个进程只执行一次。";
     [stack addArrangedSubview:self.report];
     self.start = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.start setTitle:@"开始本地检查" forState:UIControlStateNormal];
     [self.start addTarget:self action:@selector(runProbe) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.start];
     self.network = [UIButton buttonWithType:UIButtonTypeSystem];
-    [self.network setTitle:@"联网检查（仅匿名配置）" forState:UIControlStateNormal];
+    [self.network setTitle:@"联网综合检查（配置/注册/复用）" forState:UIControlStateNormal];
     [self.network addTarget:self action:@selector(runNetworkProbe) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.network];
     UIButton *copy = [UIButton buttonWithType:UIButtonTypeSystem];
@@ -336,7 +488,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：5\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：6\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
@@ -347,9 +499,9 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
             dispatch_async(dispatch_get_main_queue(), ^{ self.networkFinished = YES; show(rows); });
         });
     });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 45 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 90 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         if (!self.networkFinished) self.report.text = [self.report.text stringByAppendingString:
-            @"\n联网检查超过 45 秒尚未完成；可能停留在 SDK 调用，无法取消该调用。请复制当前报告并彻底关闭应用。\n"];
+            @"\n联网检查超过 90 秒尚未完成；可能停留在 SDK 调用，无法取消该调用。请复制当前报告并彻底关闭应用。\n"];
     });
 }
 - (void)runProbe {
@@ -360,7 +512,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：5\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：6\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
