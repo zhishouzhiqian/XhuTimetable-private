@@ -2,7 +2,7 @@
 #import <CommonCrypto/CommonDigest.h>
 
 /**
- * 仅用于离线组件检查，不发送请求。
+ * 原 iOS MTOP 签名输入工具；本函数自身不发送请求。
  * 字段顺序来自天猫校园 iOS 5.7.2 的 TBSDkSignUtility；正文按同一份 UTF-8 字节取 MD5。
  * 不复制 Android 签名串，也不以此证明候选 SDK 或服务端兼容。
  */

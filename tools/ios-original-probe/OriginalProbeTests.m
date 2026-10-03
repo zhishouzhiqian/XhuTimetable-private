@@ -9,6 +9,7 @@ NSURLRequest *CampusOriginalProbeTestRequest(NSDictionary *);
 NSURLRequest *CampusOriginalProbeTestDeviceRequest(NSDictionary *, NSDictionary *, NSString *, CampusOriginalPurpose);
 NSArray *CampusOriginalProbeTestCredentials(NSDictionary *, NSDictionary *);
 void CampusOriginalDeviceProbeTests(void);
+void CampusOriginalLoginProbeTests(void);
 @protocol ISecurityGuardOpenUnifiedSecurity <NSObject>
 @end
 static BOOL ProbeTestFailure;
@@ -20,6 +21,7 @@ static NSUInteger ProbeTestLegacyIDCalls, ProbeTestDeviceMode, ProbeTestMtopRead
 static NSUInteger ProbeTestCredentialMode, ProbeTestWUACalls, ProbeTestRegisterSignCalls;
 static NSString *ProbeTestLastSignInput;
 static NSUInteger ProbeTestRequestMode;
+NSString *CampusOriginalProbeTestLastInput(void) { return ProbeTestLastSignInput; }
 
 static NSString *ResultForStep(NSArray *rows, NSString *step) {
     // 同一步会先追加“正在执行”，再追加最终结果；断言必须读取最后一条。
@@ -56,14 +58,21 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
 - (NSDictionary *)getSecurityFactors:(NSDictionary *)parameters error:(NSError **)error {
     BOOL config = [parameters[@"api"] isEqualToString:CampusOriginalConfigAPI];
     BOOL registration = [parameters[@"api"] isEqualToString:CampusOriginalRegisterAPI];
+    BOOL account = [parameters[@"api"] isEqual:CampusOriginalAccountAPI(CampusOriginalPurposeLogin)] ||
+        [parameters[@"api"] isEqual:CampusOriginalAccountAPI(CampusOriginalPurposeProfile)] ||
+        [parameters[@"api"] isEqual:CampusOriginalAccountAPI(CampusOriginalPurposeOrders)];
     NSCAssert([parameters[@"appkey"] isEqualToString:@"TEST_APPKEY_MUST_NOT_APPEAR"] &&
-        (config || registration || [parameters[@"api"] isEqualToString:@"mtop.sys.newdeviceid"]) &&
+        (config || registration || account || [parameters[@"api"] isEqualToString:@"mtop.sys.newdeviceid"]) &&
         [parameters[@"useWua"] isEqual:@NO] && [parameters[@"env"] isEqual:@0] &&
         [parameters[@"extendParas"] isEqual:@{}], @"签名参数改变");
     NSArray *fields = [parameters[@"data"] componentsSeparatedByString:@"&"];
     NSCAssert(fields.count == 22 && [fields[3] isEqualToString:parameters[@"appkey"]] &&
         [fields[5] length] == 10 && [fields[4] length] == 32, @"MTOP 字段契约不符");
     ProbeTestLastSignInput = parameters[@"data"];
+    if (account) {
+        NSCAssert([fields[6] isEqual:parameters[@"api"]] && [fields[7] isEqual:@"1.0"], @"账号阶段 API 与签名输入不一致");
+        return @{@"x-sign": @"SECRET_ACCOUNT_SIGN", @"x-mini-wua": @"SECRET_ACCOUNT_MINI", @"x-umt": @"SECRET_ACCOUNT_UMT", @"x-sgext": @"SECRET_ACCOUNT_SGEXT"};
+    }
     registration = registration || ([parameters[@"api"] isEqual:CampusOriginalRegisterAPI.lowercaseString] &&
         [fields[9] isEqual:@"test@campus_iPhone_5.7.2"]);
     if (registration) {
@@ -339,6 +348,8 @@ int main(void) {
         ProbeTestDeviceMode = 0;
         CampusOriginalDeviceProbeTests();
         CampusOriginalNetworkProbeTests();
+        ProbeTestCredentialMode = 0;
+        CampusOriginalLoginProbeTests();
         puts("原配诊断原生桩测试通过；未执行厂商组件。");
     }
     return 0;

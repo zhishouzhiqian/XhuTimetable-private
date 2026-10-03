@@ -1,6 +1,6 @@
 # 校园原配本地诊断
 
-本实验使用用户已有的校园 5.7.2 破壳 IPA 中的原 SDK 和原资源，不依赖下载独立配套 SDK。用户已在 LiveContainer 中验证 6.8.260603 初始化成功，诊断版本 2 两次签名均具备四个必需字段，改变正文后 x-sign 不同。版本 5 用户报告匿名配置查询 HTTP 200 / SUCCESS，原 UTDID、编码和请求一致性预检全部通过。尚未将签名能力接入课表。版本 6 扩展为设备注册与返回 ID 复用的综合检查；当前版本 7 修正外层请求 API getter。
+本实验使用用户已有的校园 5.7.2 破壳 IPA 中的原 SDK 和原资源，不依赖下载独立配套 SDK。用户已在 LiveContainer 中验证 6.8.260603 初始化成功，诊断版本 2 两次签名均具备四个必需字段，改变正文后 x-sign 不同。版本 5 用户报告匿名配置查询 HTTP 200 / SUCCESS，原 UTDID、编码和请求一致性预检全部通过。尚未将签名能力接入课表。版本 6 扩展为设备注册与返回 ID 复用的综合检查；版本 7 修正外层请求 API getter，已获得用户三段联网成功报告；当前版本 8 增加手动本人登录和洗衣只读诊断。
 
 ## 用户需要构建的部分
 
@@ -31,7 +31,7 @@ Windows 可完成打包；iOS 诊断库需要 macOS/Xcode 编译。若只拿到�
 4. 点击“开始本地检查”，复制报告。不要登录、扫码或付款；诊断页没有这些操作入口。
 5. 每个新进程只运行一次。超过 45 秒未返回，保留当前报告并彻底关闭应用；超时提示不代表 SDK 线程已被取消。
 
-### 当前版本 7 的联网检查
+### 当前版本 8 的联网检查
 
 启动不会自动发送诊断请求。离线按钮仍要求断网。联网阶段连接网络，手动点击“联网综合检查（配置/注册/复用）”，依次检查匿名配置、设备注册与返回 ID 复用，最多三个任务，每个进程只执行一次综合检查。独立 WUA/UMID 结果同时保留。不要以飞行模式下的网络错误判断签名失败；综合阶段超过 90 秒会显示超时提示，SDK 调用不会因此自动取消。
 
@@ -123,3 +123,24 @@ MtopExtRequest 的初始化实现会调用 lowercaseString；运行时使用原 
 版本 7 改用外层 getApiName/getApiVersion，分别报告方法类型、空值/类型、名称和版本问题；名称仅接受已核对注册 API，版本只接受 4.0，再使用原对象返回值签名。没有直接硬编码一个签名名称来跳过对照。桩只提供真实外层 getter，明确断言外层不响应 apiName，并增加错误名称、空值、非字符串和错误版本四类签名前阻断测试，保留整个版本 6 综合检查。
 
 同时离线重新核对固定原样本的 16 个相关类/实例方法及参数编码，包括两个注册 getter、原请求初始化、Open 管理器的组件入口、UMID、安全体 int ABI、设备入口、编码入口和 AppInfo 参数入口。Windows 的 8 项 Python 打包回归与 Bash 语法检查通过；新增原生桩和真机注册/复用仍由下一次构建与报告验证。版本 6 的 WUA 结果只是本地候选生成成功，不能代替登录接口验收。
+
+
+## 版本 8：沿用 Android 业务流程，适配 iOS 登录与只读验收
+
+版本 7 用户真机报告确认：匿名配置、mtop.sys.newdeviceid/4.0 注册、带返回设备 ID 的重新签名配置均 HTTP 200 / SUCCESS；data.device_id 为 44 字符。原配 SDK 初始化、UMID 对照、候选完整 WUA 本地生成也通过。这证明原程序诊断环境下的上述能力，不证明独立课表进程已取得配套 SDK 或真实登录会话。
+
+业务顺序复用现有 Android CampusClient：官方 H5 新授权码 → snslogin → 本人资料 → 洗衣运行订单。iOS 适配使用原程序的 ALBBOAuthLoginInfo、ALBBRiskControlInfo 与 ALBBJSON.objectToJsonString:，没有复制 Android 的 sdkVersion、appVersion、设备品牌/型号或 Android 风控 ABI。原 ALBBAccountOAuthLoginHandler 的 snsLoginInfo/riskControlInfo 为外层 JSON 字符串，ALBBNewMtopInvoker 调用 useHttpPost；ALBBRPCInfo.site 是 NSString，useAcitonType/useDeviceToken 是 NSNumber 对象 setter。相关方法名称、参数编码与调用流程已在固定原样本离线核对。
+
+页面先执行原有三个联网综合任务，全部通过才启用“本人登录及洗衣只读检查”。点击后在独立 WKWebsiteDataStore.nonPersistentDataStore 中打开官方授权页，由用户手动发送短信、输入验证码、选择本人账号和完成必要验证。诊断不读取网页输入或正文，不调用独立短信接口。授权策略沿用已有 LaundryAuthorizationPolicy：仅官方 HTTPS 域、禁止外部应用跳转，只消费主页面 www.alipay.com/webviewbridge 中唯一 action=taobao_auth_token 和唯一合格 top_auth_code。网页授权请求数量由用户操作及官方页面决定，不包含在三个原生任务的上限中。
+
+取得授权码后最多三个新的串行 POST：mtop.taobao.mloginservice.snslogin/1.0、mtop.tmall.campus.member.app.user.get/1.0、mtop.tmall.campus.share.applet.general.user.urgent.order.list/1.0。原 iOS 登录 API 在 ALBB 包装层使用 mtop.taobao.mloginService.snsLogin，诊断固定网关与签名名均小写，与原 MTOP 规范化一致。当前资料请求使用 platForm=ios，此平台字段的服务端接受性仍待真机验收；订单查询沿用 Android 已核对的 USER_URGENT_ORDER_LIST 与 CAMPUS/WASH_AND_CARE 只读结构。
+
+登录模型使用原 AppInfo AppKey、原 UTDID、iOS TTID、本次返回设备 ID、新授权码、site 字符串 96、原模型的应用和登录 SDK 版本。清除模型的 hid、deviceTokenKey/deviceTokenSign 与 ext，避免旧账号上下文进入新请求；不初始化完整 TCAccountCenter，不调用自动登录或登出。若原模型缺 SDK 版本，只通过 ALBBSecurityStorageImpl.getSdkVersion 取得原 SDK 自身的固定版本（该原样本实现为直接返回常量），不冒用 SecurityGuard 的版本或 Android SDK 版本。本次重新生成 WUA/UMID，风险模型通过原 addDeviceInfo 添加 iOS 信息，WUA 的数据使用毫秒时间并覆盖原模型同一 t。
+
+每个 POST 的 JSON 只冻结一次，正文 UTF-8 的 MD5 进入原 iOS 22 字段签名，发送表单 data 使用同一字符串；时间、设备 ID、四个安全字段重新生成并核对。登录请求不带旧 x-sid/x-uid 或 Cookie，后两项只使用本次成功登录响应的 returnValue.sid/hid，同时进入新签名串和请求头。目的地、API/版本、方法、表单正文、精确头白名单、无 Cookie、无跳转和请求时间均在发送前再次检查，没有应用层自动重试。
+
+HTTP 200 / SUCCESS 仍只是第一层：登录须有非空 sid/hid（hid 为数值时仅接受整数文本，拒绝布尔值），资料须有身份字段，运行订单须明确 fail=false 且 urgentOrderListResponse 为数组，才能分别判定该阶段通过。正常空数组可以验收，业务失败或缺字段不能显示“暂无订单”。报告只展示固定步骤、HTTP/白名单业务码、必要数值错误、订单数量和是否通过，不展示手机号、授权码、sid/hid、Cookie、订单内容、请求地址或安全字段。登录与查询完成后不持久化会话，也不写原 SDK 的账号状态。
+
+回调只消费一次，取消、错误与迟到回调不能重复交换同一授权码；每进程只执行一次本人登录检查。离线/综合网络检查仍保持原有行为。此版本没有接入课表客户端、设备启动、订单创建、支付或取消订单。运行订单查询若因 UCC/Cookie 或其它会话协议差异失败，会保留实际阶段结果，不用网页返回或空页面替代验收。
+
+新增 macOS 原生桩覆盖官方授权域及欺骗域、主页面/子框架、重复回调参数、授权码形状、原模型对象 setter、旧账号字段清除、嵌套 JSON 字符串、注册设备 ID 对照、POST 冻结正文与 MD5、sid/hid 在签名中的位置、登录与只读头隔离、发送前越界拒绝、有效会话解析、资料脱敏、正常空运行列表和业务失败阻断。发送测试只使用必须在建连前拒绝的请求，不访问服务器、不发送短信。Windows 未运行本次 Xcode 原生编译、WKWebView 或真实登录网络验收，仍需用户构建并操作新诊断包。

@@ -1,0 +1,149 @@
+#import "OriginalNetworkProbe.h"
+#import <CommonCrypto/CommonDigest.h>
+
+NSString *CampusOriginalProbeTestLoginBody(NSDictionary *, NSString *);
+NSURLRequest *CampusOriginalProbeTestAccountRequest(NSDictionary *, NSString *, NSDictionary *, CampusOriginalPurpose);
+NSString *CampusOriginalProbeTestLastInput(void);
+
+@interface ALBBOAuthLoginInfo : NSObject
+@property(nonatomic, copy) NSString *appName;
+@property(nonatomic, copy) NSString *utdid;
+@property(nonatomic, copy) NSString *ttid;
+@property(nonatomic, copy) NSString *deviceId;
+@property(nonatomic, copy) NSString *token;
+@property(nonatomic, copy) NSString *snsType;
+@property(nonatomic, copy) NSString *site;
+@property(nonatomic, copy) NSString *locale;
+@property(nonatomic, copy) NSString *hid;
+@property(nonatomic, copy) NSString *deviceTokenKey;
+@property(nonatomic, copy) NSString *deviceTokenSign;
+@property(nonatomic, strong) NSNumber *useAcitonType;
+@property(nonatomic, strong) NSNumber *useDeviceToken;
+@property(nonatomic, strong) NSDictionary *ext;
+- (NSDictionary *)testJSON;
+@end
+@implementation ALBBOAuthLoginInfo
+- (instancetype)init {
+    self = [super init];
+    if (self) { self.hid = @"OLD_ACCOUNT_MUST_NOT_SEND"; self.ext = @{@"cookie": @"OLD_COOKIE_MUST_NOT_SEND"}; }
+    return self;
+}
+- (NSDictionary *)testJSON {
+    NSMutableDictionary *value = [@{@"sdkVersion": @"ios_mock", @"appVersion": @"5.7.2"} mutableCopy];
+    for (NSString *key in @[@"appName", @"utdid", @"ttid", @"deviceId", @"token", @"snsType", @"site", @"locale",
+        @"hid", @"deviceTokenKey", @"deviceTokenSign", @"ext", @"useAcitonType", @"useDeviceToken"]) {
+        id item = [self valueForKey:key]; if (item) value[key] = item;
+    }
+    return value;
+}
+@end
+@interface ALBBRiskControlInfo : NSObject
+@property(nonatomic, copy) NSString *wua;
+@property(nonatomic, copy) NSString *umidToken;
+@property(nonatomic, copy) NSString *apdId;
+@property(nonatomic, copy) NSString *t;
+- (void)addDeviceInfo;
+- (NSDictionary *)testJSON;
+@end
+@implementation ALBBRiskControlInfo
+- (void)addDeviceInfo {}
+- (NSDictionary *)testJSON {
+    return @{@"wua": self.wua ?: @"", @"umidToken": self.umidToken ?: @"", @"apdId": self.apdId ?: @"", @"t": self.t ?: @"", @"osName": @"ios"};
+}
+@end
+@interface ALBBJSON : NSObject
++ (NSString *)objectToJsonString:(id)object;
+@end
+@implementation ALBBJSON
++ (NSString *)objectToJsonString:(id)object {
+    NSData *data = [NSJSONSerialization dataWithJSONObject:[object testJSON] options:0 error:nil];
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+}
+@end
+
+static NSData *LoginTestData(id object) { return [NSJSONSerialization dataWithJSONObject:object options:0 error:nil]; }
+
+void CampusOriginalLoginProbeTests(void) {
+    NSString *code = @"TEST_AUTHORIZATION_CODE_123456";
+    NSString *callback = [NSString stringWithFormat:@"https://www.alipay.com/webviewbridge?action=taobao_auth_token&top_auth_code=%@", code];
+    NSCAssert([CampusOriginalAuthorizationCode([NSURL URLWithString:callback], YES) isEqual:code], @"新主页面授权回调未通过");
+    NSCAssert(CampusOriginalAuthorizationCode([NSURL URLWithString:callback], NO) == nil, @"子框架回调被消费");
+    for (NSString *suffix in @[@"&top_auth_code=other", @"&action=other", @"#fragment"]) {
+        NSCAssert(CampusOriginalAuthorizationCode([NSURL URLWithString:[callback stringByAppendingString:suffix]], YES) == nil, @"重复或歧义回调被消费");
+    }
+    for (NSString *url in @[@"https://taobao.com.attacker.invalid/", @"http://havanalogin.taobao.com/", @"https://user@taobao.com/", @"https://taobao.com:444/", @"taobao://login"]) {
+        NSCAssert(!CampusOriginalAuthorizationNavigation([NSURL URLWithString:url]), @"授权目的地边界未生效");
+    }
+    NSCAssert(CampusOriginalAuthorizationNavigation([NSURL URLWithString:@"https://havanalogin.taobao.com/mini_login.htm"]), @"官方登录域被拒绝");
+    NSString *deviceID = [@"D" stringByPaddingToLength:44 withString:@"D" startingAtIndex:0];
+    NSMutableDictionary *identity = [@{@"x-appkey": @"TEST_APPKEY_MUST_NOT_APPEAR", @"x-utdid": @"AAAAAAAAAAAAAAAAAAAAAAAA",
+        @"x-ttid": @"test@campus_iPhone_5.7.2", @"deviceID": deviceID} mutableCopy];
+    identity[@"openManager"] = [NSClassFromString(@"OpenSecurityGuardManager") new];
+    identity[@"unified"] = [NSClassFromString(@"ProbeOriginalUnified") new];
+    NSString *body = CampusOriginalProbeTestLoginBody(identity, code);
+    NSCAssert(body && ![body containsString:@"OLD_ACCOUNT"] && ![body containsString:@"OLD_COOKIE"], @"原模型构造失败或旧会话进入登录正文");
+    NSDictionary *outer = [NSJSONSerialization JSONObjectWithData:[body dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSCAssert([outer[@"snsLoginInfo"] isKindOfClass:NSString.class] && [outer[@"riskControlInfo"] isKindOfClass:NSString.class], @"外层登录字段未保持 JSON 字符串");
+    NSDictionary *info = [NSJSONSerialization JSONObjectWithData:[outer[@"snsLoginInfo"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *risk = [NSJSONSerialization JSONObjectWithData:[outer[@"riskControlInfo"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSCAssert([info[@"useAcitonType"] isEqual:@YES] && [info[@"useDeviceToken"] isEqual:@YES] &&
+        [info[@"site"] isEqual:@"96"] && [risk[@"t"] length] == 13, @"原 iOS 开关对象、site 字符串或时间契约改变");
+    NSMutableDictionary *wrong = [info mutableCopy]; wrong[@"deviceId"] = @"OLD_DEVICE";
+    NSCAssert(CampusOriginalLoginBody(wrong, risk, identity, code) == nil, @"登录正文与本次注册 ID 不一致未阻断");
+    NSCAssert(CampusOriginalLoginBody(info, risk, identity, @"short") == nil, @"无效授权码未在构造前阻断");
+    NSString *(^encode)(NSString *) = ^NSString *(NSString *value) { return [value stringByAddingPercentEncodingWithAllowedCharacters:
+        [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"]]; };
+    NSDictionary *factors = @{@"x-sign": @"SECRET_SIGN", @"x-mini-wua": @"SECRET_MINI", @"x-umt": @"SECRET_UMT", @"x-sgext": @"SECRET_SGEXT"};
+    NSDictionary *session = @{@"sid": @"SECRET_SID+/=", @"uid": @"123456"};
+    NSArray *bodies = @[body, @"{\"platForm\":\"ios\"}", @"{\"requestType\":\"USER_URGENT_ORDER_LIST\",\"requestJson\":\"{\\\"isv\\\":\\\"CAMPUS\\\",\\\"businessType\\\":\\\"WASH_AND_CARE\\\"}\"}"];
+    for (NSUInteger i = 0; i < bodies.count; i++) {
+        CampusOriginalPurpose purpose = (CampusOriginalPurpose)(CampusOriginalPurposeLogin + i);
+        NSString *reason = nil;
+        NSURLRequest *request = CampusOriginalAccountRequest(identity, @"1800000000", bodies[i], factors, i ? session : nil, purpose, encode, &reason);
+        NSCAssert(request && CampusOriginalAccountRequestInScope(request, purpose) && [request.HTTPMethod isEqual:@"POST"], @"合法本人登录/只读 POST 构造失败");
+        NSURLRequest *signedRequest = CampusOriginalProbeTestAccountRequest(identity, bodies[i], i ? session : nil, purpose);
+        NSCAssert(signedRequest != nil, @"原签名流程不能构造账号阶段 POST");
+        NSArray *fields = [CampusOriginalProbeTestLastInput() componentsSeparatedByString:@"&"];
+        NSCAssert(fields.count == 22 && [fields[10] isEqual:deviceID] &&
+            [fields[1] isEqual:(i ? session[@"uid"] : @"")] && [fields[8] isEqual:(i ? session[@"sid"] : @"")], @"新会话未进入原 iOS 22 字段签名串");
+        NSData *raw = [bodies[i] dataUsingEncoding:NSUTF8StringEncoding]; unsigned char digest[CC_MD5_DIGEST_LENGTH];
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        CC_MD5(raw.bytes, (CC_LONG)raw.length, digest);
+#pragma clang diagnostic pop
+        NSMutableString *md5 = [NSMutableString string];
+        for (NSUInteger byte = 0; byte < sizeof(digest); byte++) [md5 appendFormat:@"%02x", digest[byte]];
+        NSCAssert([fields[4] isEqual:md5], @"账号阶段正文与签名 MD5 来源不一致");
+        NSString *form = [[NSString alloc] initWithData:request.HTTPBody encoding:NSUTF8StringEncoding];
+        NSCAssert([[[form substringFromIndex:5] stringByRemovingPercentEncoding] isEqual:bodies[i]], @"POST 正文改变或多编码");
+        NSCAssert(!CampusOriginalDeviceRequestInScope(request, CampusOriginalPurposeReuse), @"账号请求混入匿名范围");
+        if (i) NSCAssert([[[request valueForHTTPHeaderField:@"x-sid"] stringByRemovingPercentEncoding] isEqual:session[@"sid"]], @"会话编码回读失败");
+        for (NSUInteger mutation = 0; mutation < 4; mutation++) {
+            NSMutableURLRequest *bad = [request mutableCopy];
+            if (mutation == 0) [bad setValue:@"old-account" forHTTPHeaderField:@"Cookie"];
+            if (mutation == 1) bad.HTTPMethod = @"GET";
+            if (mutation == 2) bad.URL = [NSURL URLWithString:@"https://example.invalid/gw/api/1.0/"];
+            if (mutation == 3) { if (i) [bad setValue:nil forHTTPHeaderField:@"x-sid"]; else [bad setValue:@"OLD_SID" forHTTPHeaderField:@"x-sid"]; }
+            NSCAssert(!CampusOriginalAccountRequestInScope(bad, purpose), @"账号请求范围拒绝错误被过期时间测试掩盖");
+            __block BOOL rejected = NO;
+            CampusOriginalAccountSend(bad, purpose, ^(NSDictionary *outcome, NSDictionary *evidence) {
+                rejected = ![outcome[@"success"] boolValue] && !evidence && [outcome[@"summary"] containsString:@"未发送"];
+            });
+            NSCAssert(rejected, @"账号请求越界或会话不完整未在建连前拒绝");
+        }
+    }
+    NSDictionary *loginEvidence = CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"returnValue": @{@"sid": @"SID", @"hid": @"123"}}}), CampusOriginalPurposeLogin);
+    NSCAssert([loginEvidence[@"sid"] isEqual:@"SID"] && [loginEvidence[@"uid"] isEqual:@"123"], @"会话字段映射错误");
+    NSDictionary *numericID = CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"returnValue": @{@"sid": @"SID", @"hid": @123}}}), CampusOriginalPurposeLogin);
+    NSCAssert([numericID[@"uid"] isEqual:@"123"], @"数值 hid 未转换为签名使用的原始文本");
+    NSCAssert(CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"returnValue": @{@"sid": @"SID", @"hid": @YES}}}), CampusOriginalPurposeLogin) == nil,
+        @"布尔值误当作账号 ID");
+    NSCAssert(CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"returnValue": @{}}}), CampusOriginalPurposeLogin) == nil, @"业务码成功但会话空被接受");
+    NSDictionary *profile = CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"phone": @"SECRET_PHONE"}}), CampusOriginalPurposeProfile);
+    NSCAssert([profile[@"verified"] boolValue] && ![profile.description containsString:@"SECRET"], @"本人资料未脱敏");
+    NSDictionary *orders = CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @NO, @"data": @{@"urgentOrderListResponse": @[]}}}), CampusOriginalPurposeOrders);
+    NSCAssert([orders[@"count"] isEqual:@0] && [orders[@"verified"] boolValue], @"成功的空运行列表误判失败");
+    NSCAssert(CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @YES, @"data": @{@"urgentOrderListResponse": @[]}}}), CampusOriginalPurposeOrders) == nil &&
+        CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"data": @{@"urgentOrderListResponse": @[]}}}), CampusOriginalPurposeOrders) == nil,
+        @"业务失败或缺少业务状态被误判为空订单");
+}

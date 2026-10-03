@@ -14,7 +14,8 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
 void CampusOriginalConfigSend(NSURLRequest *request, void (^completion)(NSDictionary *));
 
 typedef NS_ENUM(NSInteger, CampusOriginalPurpose) {
-    CampusOriginalPurposeConfig, CampusOriginalPurposeRegister, CampusOriginalPurposeReuse
+    CampusOriginalPurposeConfig, CampusOriginalPurposeRegister, CampusOriginalPurposeReuse,
+    CampusOriginalPurposeLogin, CampusOriginalPurposeProfile, CampusOriginalPurposeOrders
 };
 FOUNDATION_EXPORT NSString *const CampusOriginalRegisterAPI;
 NSString *CampusOriginalRegistrationBody(NSString *utdid, NSString *platform, NSString *mac);
@@ -25,3 +26,21 @@ BOOL CampusOriginalDeviceRequestInScope(NSURLRequest *request, CampusOriginalPur
 NSString *CampusOriginalRegisteredDevice(NSData *body);
 void CampusOriginalDeviceSend(NSURLRequest *request, CampusOriginalPurpose purpose,
     void (^completion)(NSDictionary *, NSString *));
+
+NSString *CampusOriginalAuthorizationCode(NSURL *url, BOOL mainFrame);
+BOOL CampusOriginalAuthorizationNavigation(NSURL *url);
+NSURL *CampusOriginalAuthorizationURL(NSString *appKey);
+NSString *CampusOriginalLoginBody(NSDictionary *info, NSDictionary *risk, NSDictionary *identity, NSString *code);
+NSString *CampusOriginalAccountAPI(CampusOriginalPurpose purpose);
+NSURLRequest *CampusOriginalAccountRequest(NSDictionary *identity, NSString *time, NSString *body,
+    NSDictionary *factors, NSDictionary *session, CampusOriginalPurpose purpose,
+    NSString *(^encode)(NSString *), NSString *__autoreleasing *reason);
+BOOL CampusOriginalAccountRequestInScope(NSURLRequest *request, CampusOriginalPurpose purpose);
+NSDictionary *CampusOriginalAccountEvidence(NSData *body, CampusOriginalPurpose purpose);
+void CampusOriginalAccountSend(NSURLRequest *request, CampusOriginalPurpose purpose,
+    void (^completion)(NSDictionary *, NSDictionary *));
+#ifndef CAMPUS_ORIGINAL_PROBE_TEST
+@class UIViewController;
+void CampusOriginalPresentAuthorization(UIViewController *parent, NSString *appKey,
+    void (^completion)(NSString *, NSString *));
+#endif

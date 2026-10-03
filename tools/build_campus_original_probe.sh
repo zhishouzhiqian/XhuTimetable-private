@@ -8,8 +8,10 @@ python3 -m unittest discover -s tools -p 'test_prepare_campus_original_probe.py'
 xcrun --sdk macosx clang -fobjc-arc -fblocks -DCAMPUS_ORIGINAL_PROBE_TEST=1 \
   tools/ios-original-probe/OriginalProbe.m tools/ios-original-probe/OriginalNetworkProbe.m \
   tools/ios-original-probe/OriginalDeviceProbe.m \
+  tools/ios-original-probe/OriginalLoginProbe.m \
   tools/ios-original-probe/OriginalProbeTests.m tools/ios-original-probe/OriginalNetworkProbeTests.m \
   tools/ios-original-probe/OriginalDeviceProbeTests.m \
+  tools/ios-original-probe/OriginalLoginProbeTests.m \
   -framework Foundation -framework CoreFoundation -o "$output/native-tests"
 "$output/native-tests"
 xcrun --sdk iphoneos clang -fobjc-arc -fblocks -fvisibility=hidden -dynamiclib \
@@ -17,7 +19,8 @@ xcrun --sdk iphoneos clang -fobjc-arc -fblocks -fvisibility=hidden -dynamiclib \
   -install_name '@executable_path/CampusOriginalProbe.dylib' \
   tools/ios-original-probe/OriginalProbe.m tools/ios-original-probe/OriginalNetworkProbe.m \
   tools/ios-original-probe/OriginalDeviceProbe.m \
-  -framework Foundation -framework UIKit \
+  tools/ios-original-probe/OriginalLoginProbe.m tools/ios-original-probe/OriginalAuthorizationView.m \
+  -framework Foundation -framework CoreFoundation -framework UIKit -framework WebKit \
   -o "$output/CampusOriginalProbe.dylib"
 xcrun nm -gU "$output/CampusOriginalProbe.dylib" > "$output/exports.txt"
 grep -q ' _CampusOriginalProbeMain$' "$output/exports.txt"

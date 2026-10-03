@@ -158,6 +158,7 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
 @property(nonatomic) BOOL oversized;
 @property(nonatomic) CampusOriginalPurpose purpose;
 @property(nonatomic, copy) void (^completion)(NSDictionary *, NSString *);
+@property(nonatomic, copy) void (^accountCompletion)(NSDictionary *, NSDictionary *);
 @end
 
 @implementation CampusOriginalConfigTransport
@@ -196,11 +197,24 @@ NSDictionary *CampusOriginalConfigOutcome(NSInteger status, NSData *body, NSInte
         deviceID = CampusOriginalRegisteredDevice(self.body);
         if (!deviceID) result = @{@"success": @NO, @"summary": @"HTTP/业务码通过，但 data.device_id 缺失或形状未通过；不复用"};
     }
+    NSDictionary *evidence = nil;
+    if (self.accountCompletion && [result[@"success"] boolValue]) {
+        evidence = CampusOriginalAccountEvidence(self.body, self.purpose);
+        if (!evidence) {
+            NSString *reason = self.purpose == CampusOriginalPurposeLogin ? @"returnValue.sid/hid 有效值未通过" :
+                self.purpose == CampusOriginalPurposeProfile ? @"资料 openUserId/phone 身份字段未通过" :
+                @"订单 fail=false 或 urgentOrderListResponse 数组未通过";
+            result = @{@"success": @NO, @"summary": [NSString stringWithFormat:@"HTTP/业务码通过，但 %@（数据隐藏）", reason]};
+        }
+    }
     [self.body setLength:0];
     void (^completion)(NSDictionary *, NSString *) = self.completion;
     self.completion = nil;
+    void (^accountCompletion)(NSDictionary *, NSDictionary *) = self.accountCompletion;
+    self.accountCompletion = nil;
     [session finishTasksAndInvalidate];
     if (completion) completion(result, deviceID);
+    if (accountCompletion) accountCompletion(result, evidence);
 }
 @end
 
@@ -227,16 +241,22 @@ void CampusOriginalConfigSend(NSURLRequest *request, void (^completion)(NSDictio
     });
 }
 
-void CampusOriginalDeviceSend(NSURLRequest *request, CampusOriginalPurpose purpose,
-                              void (^completion)(NSDictionary *, NSString *)) {
-    if (!CampusOriginalDeviceRequestInScope(request, purpose)) {
-        completion(@{@"success": @NO, @"summary": @"发送前范围核对失败；未发送"}, nil); return;
+static void ProbeSend(NSURLRequest *request, CampusOriginalPurpose purpose,
+                     void (^completion)(NSDictionary *, NSString *), void (^accountCompletion)(NSDictionary *, NSDictionary *)) {
+    void (^reject)(NSString *) = ^(NSString *reason) {
+        NSDictionary *outcome = @{@"success": @NO, @"summary": reason};
+        if (completion) completion(outcome, nil);
+        if (accountCompletion) accountCompletion(outcome, nil);
+    };
+    BOOL scope = accountCompletion ? CampusOriginalAccountRequestInScope(request, purpose) : CampusOriginalDeviceRequestInScope(request, purpose);
+    if (!scope) {
+        reject(@"发送前范围核对失败；未发送"); return;
     }
     NSString *time = [request valueForHTTPHeaderField:@"x-t"];
     if (time.length != 10 ||
         [time rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet].location != NSNotFound ||
         fabs(NSDate.date.timeIntervalSince1970 - time.doubleValue) > 120) {
-        completion(@{@"success": @NO, @"summary": @"请求时间过期或无效；未发送"}, nil); return;
+        reject(@"请求时间过期或无效；未发送"); return;
     }
     NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
     config.HTTPShouldSetCookies = NO;
@@ -253,8 +273,19 @@ void CampusOriginalDeviceSend(NSURLRequest *request, CampusOriginalPurpose purpo
     delegate.body = [NSMutableData data];
     delegate.purpose = purpose;
     delegate.completion = completion;
+    delegate.accountCompletion = accountCompletion;
     NSOperationQueue *queue = [[NSOperationQueue alloc] init];
     queue.maxConcurrentOperationCount = 1;
     NSURLSession *session = [NSURLSession sessionWithConfiguration:config delegate:delegate delegateQueue:queue];
     [[session dataTaskWithRequest:request] resume];
+}
+
+void CampusOriginalDeviceSend(NSURLRequest *request, CampusOriginalPurpose purpose,
+                              void (^completion)(NSDictionary *, NSString *)) {
+    ProbeSend(request, purpose, completion, nil);
+}
+
+void CampusOriginalAccountSend(NSURLRequest *request, CampusOriginalPurpose purpose,
+                              void (^completion)(NSDictionary *, NSDictionary *)) {
+    ProbeSend(request, purpose, nil, completion);
 }
