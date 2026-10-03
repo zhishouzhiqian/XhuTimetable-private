@@ -41,7 +41,7 @@ NSDictionary *CampusTimetableDevice(NSDictionary *payload, NSString *number) {
         }
     }
     return @{@"resNo": number, @"name": Text(device[@"deviceName"], @"洗衣机"), @"location": Location(device),
-        @"status": Text(device[@"workbenchStatusDESC"], @"状态未提供"), @"canUse": @(True(device[@"deviceCanUse"])), @"programs": programs};
+        @"status": Text(device[@"workbenchStatusDESC"], @"状态未提供"), @"canUse": True(device[@"deviceCanUse"]) ? @YES : @NO, @"programs": programs};
 }
 NSDictionary *CampusTimetableOrder(NSDictionary *row, NSDictionary *detail) {
     if (![row isKindOfClass:NSDictionary.class] || (detail && ![detail isKindOfClass:NSDictionary.class])) return nil;
@@ -59,6 +59,6 @@ NSDictionary *CampusTimetableOrder(NSDictionary *row, NSDictionary *detail) {
         if ([integer numberOfMatchesInString:text options:0 range:NSMakeRange(0, text.length)] && text.longLongValue <= 604800) seconds = @(text.longLongValue);
     }
     return @{@"name": Text(row[@"deviceName"], @"洗衣机"), @"program": Text((detail ?: row)[@"workModeName"], @"程序未提供"),
-        @"location": Location(detail ?: row), @"status": status, @"running": @(running), @"seconds": seconds,
-        @"reference": ID(row[@"isvOrderId"]) ?: @"", @"completed": @(completed), @"waitingForDevice": @(paid && [fulfil isEqual:@"WAIT_FULFIL"])};
+        @"location": Location(detail ?: row), @"status": status, @"running": running ? @YES : @NO, @"seconds": seconds,
+        @"reference": ID(row[@"isvOrderId"]) ?: @"", @"completed": completed ? @YES : @NO, @"waitingForDevice": (paid && [fulfil isEqual:@"WAIT_FULFIL"]) ? @YES : @NO};
 }

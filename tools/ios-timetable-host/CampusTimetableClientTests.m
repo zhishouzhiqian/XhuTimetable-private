@@ -1,5 +1,6 @@
 #import "CampusTimetableClient.h"
 #include <dispatch/dispatch.h>
+#import <CoreFoundation/CoreFoundation.h>
 
 // 测试只替换固定 SDK/网络边界，不加载厂商组件、不发送请求。
 static NSArray *probeRows;
@@ -12,9 +13,14 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *root,
     completion(probeRows);
 }
 NSURLRequest *CampusTimetableAccountRequest(NSDictionary *context, NSDictionary *session,
-    CampusOriginalPurpose purpose, NSDictionary *selection, NSString *code) { return nil; }
+    CampusOriginalPurpose purpose, NSDictionary *selection, NSString *code) {
+    return purpose == CampusOriginalPurposeLogin ? [NSURLRequest requestWithURL:[NSURL URLWithString:@"https://example.invalid/"]] : nil;
+}
 void CampusOriginalAccountSend(NSURLRequest *request, CampusOriginalPurpose purpose,
-    void (^completion)(NSDictionary *, NSDictionary *)) { NSCAssert(NO, @"初始化测试不应发账号请求"); }
+    void (^completion)(NSDictionary *, NSDictionary *)) {
+    NSCAssert(purpose == CampusOriginalPurposeLogin, @"测试仅允许桩登录交换");
+    completion(@{@"success": @YES}, @{@"sid": @"test-session", @"uid": @"test-user"});
+}
 NSURL *CampusOriginalAuthorizationURL(NSString *key) { return nil; }
 NSString *CampusOriginalMachineNumber(NSString *number) { return number; }
 NSDictionary *CampusTimetableDevice(NSDictionary *payload, NSString *number) { return nil; }
@@ -23,13 +29,24 @@ NSDictionary *CampusTimetableOrder(NSDictionary *row, NSDictionary *detail) { re
 static NSDictionary *Call(CampusTimetableClient *client, NSString *action) {
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     __block NSDictionary *response;
-    [client perform:action payload:@"{}" completion:^(NSString *result, NSString *error) {
+    [client perform:action payload:[action isEqual:@"exchange"] ? @"{\"code\":\"test-code\"}" : @"{}" completion:^(NSString *result, NSString *error) {
         response = @{@"result": result ?: NSNull.null, @"error": error ?: NSNull.null};
         dispatch_semaphore_signal(done);
     }];
     NSCAssert(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC)) == 0,
         @"原生初始化回调超时");
     return response;
+}
+
+static void AssertSession(CampusTimetableClient *client, BOOL expected) {
+    NSDictionary *response = Call(client, @"hasSession");
+    NSCAssert(response[@"error"] == NSNull.null, @"会话查询失败");
+    NSData *bytes = [response[@"result"] dataUsingEncoding:NSUTF8StringEncoding];
+    id decoded = [NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
+    id present = [decoded isKindOfClass:NSDictionary.class] ? decoded[@"present"] : nil;
+    // NSNumber 的 boolValue 会把数字 0/1 也当作布尔，必须检查 JSON 回读的真实类型。
+    NSCAssert(present && CFGetTypeID((__bridge CFTypeRef)present) == CFBooleanGetTypeID(), @"会话字段不是 JSON 布尔");
+    NSCAssert([present boolValue] == expected, @"会话状态与初始化/登录/退出不符");
 }
 
 int main(void) {
@@ -51,7 +68,11 @@ int main(void) {
             NSUInteger calls = probeCalls;
             NSCAssert(Call(client, @"initialize")[@"error"] == NSNull.null && calls == probeCalls,
                 @"已就绪客户端重复注册");
-            NSCAssert([Call(client, @"hasSession")[@"result"] containsString:@"false"], @"初始化冒充已登录");
+            AssertSession(client, NO);
+            NSCAssert(Call(client, @"exchange")[@"error"] == NSNull.null, @"桩会话交换失败");
+            AssertSession(client, YES);
+            NSCAssert(Call(client, @"logout")[@"error"] == NSNull.null, @"退出会话失败");
+            AssertSession(client, NO);
         }
         probeReady = NO; probeRows = @[];
         NSCAssert([Call([CampusTimetableClient new], @"initialize")[@"error"] containsString:@"没有返回可用阶段记录"],

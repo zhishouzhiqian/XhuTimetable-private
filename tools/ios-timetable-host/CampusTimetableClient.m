@@ -94,7 +94,7 @@ static NSString *CampusInitializationReport(NSArray *rows) {
                 return;
             }
             if ([action isEqual:@"logout"]) { self.session = nil; finish(@{}, nil); return; }
-            if ([action isEqual:@"hasSession"]) { finish(@{@"present": @(self.session != nil)}, nil); return; }
+            if ([action isEqual:@"hasSession"]) { finish(@{@"present": self.session ? @YES : @NO}, nil); return; }
             if (!self.context) { finish(nil, @"校园客户端尚未初始化。"); return; }
             if ([action isEqual:@"authorizationUrl"]) {
                 NSURL *url = CampusOriginalAuthorizationURL(self.context[@"x-appkey"]);
