@@ -1,6 +1,6 @@
 # 校园原配本地诊断
 
-本实验使用用户已有的校园 5.7.2 破壳 IPA 中的原 SDK 和原资源，不依赖下载独立配套 SDK。用户已在 LiveContainer 中验证 6.8.260603 初始化成功，诊断版本 2 两次签名均具备四个必需字段，改变正文后 x-sign 不同。版本 5 用户报告匿名配置查询 HTTP 200 / SUCCESS，原 UTDID、编码和请求一致性预检全部通过。尚未将签名能力接入课表。版本 6 扩展为设备注册与返回 ID 复用的综合检查。
+本实验使用用户已有的校园 5.7.2 破壳 IPA 中的原 SDK 和原资源，不依赖下载独立配套 SDK。用户已在 LiveContainer 中验证 6.8.260603 初始化成功，诊断版本 2 两次签名均具备四个必需字段，改变正文后 x-sign 不同。版本 5 用户报告匿名配置查询 HTTP 200 / SUCCESS，原 UTDID、编码和请求一致性预检全部通过。尚未将签名能力接入课表。版本 6 扩展为设备注册与返回 ID 复用的综合检查；当前版本 7 修正外层请求 API getter。
 
 ## 用户需要构建的部分
 
@@ -31,7 +31,7 @@ Windows 可完成打包；iOS 诊断库需要 macOS/Xcode 编译。若只拿到�
 4. 点击“开始本地检查”，复制报告。不要登录、扫码或付款；诊断页没有这些操作入口。
 5. 每个新进程只运行一次。超过 45 秒未返回，保留当前报告并彻底关闭应用；超时提示不代表 SDK 线程已被取消。
 
-### 当前版本 6 的联网检查
+### 当前版本 7 的联网检查
 
 启动不会自动发送诊断请求。离线按钮仍要求断网。联网阶段连接网络，手动点击“联网综合检查（配置/注册/复用）”，依次检查匿名配置、设备注册与返回 ID 复用，最多三个任务，每个进程只执行一次综合检查。独立 WUA/UMID 结果同时保留。不要以飞行模式下的网络错误判断签名失败；综合阶段超过 90 秒会显示超时提示，SDK 调用不会因此自动取消。
 
@@ -103,7 +103,7 @@ macOS 原生桩测试覆盖默认索引/认证参数、空初始化字典、AppK
 
 注册字段来自固定原 iOS 样本 getDeviceIDFromServer:：device_global_id、c0=apple、c1=UIDevice.tbsdkPlatform、c2=原 UTDID、c3=0987654321、c4=UIDevice.tbsdkMacaddress、c5=CPUID、c6=SDCARDID、new_id_rule=true、new_device=true；均为字符串。UIDevice(TBNewSDKIdentifierAddition) 的类方法元数据与外部绑定已核对。不复制 Android 的 bizId，也不使用随机 UUID 替代原设备入口。
 
-MtopExtRequest 的初始化实现会调用 lowercaseString；运行时仍用原 initWithApiName:apiVersion: 和 apiName getter 核对实际名称，再取原返回值用于签名；网关路径固定小写。正文只序列化一次，同一份 UTF-8 字节参与 MD5 和 URL 编码，发送前再核对回读正文。复用时同一返回 ID 同时进入签名串第 11 字段与编码后的 x-devid 请求头，重新生成时间和四个安全字段。每阶段重新读取原 UTDID，变化就停止。
+MtopExtRequest 的初始化实现会调用 lowercaseString；运行时使用原 initWithApiName:apiVersion: 和外层 getApiName/getApiVersion 核对实际名称（版本 7 修正，版本 6 曾误用 apiName），再取原返回值用于签名；网关路径固定小写。正文只序列化一次，同一份 UTF-8 字节参与 MD5 和 URL 编码，发送前再核对回读正文。复用时同一返回 ID 同时进入签名串第 11 字段与编码后的 x-devid 请求头，重新生成时间和四个安全字段。每阶段重新读取原 UTDID，变化就停止。
 
 返回 ID 仅接受非空、最多 256 字符的有界安全字母表字符串，展示长度而不展示值。Android 样本的 44 字符长度不是已经验证的 iOS 契约，因此不以其作为必须长度。HTTP 200 和 SUCCESS 与 data.device_id 有效必须同时满足，才能进入复用阶段。
 
@@ -112,3 +112,14 @@ MtopExtRequest 的初始化实现会调用 lowercaseString；运行时仍用原 
 新增原生桩检查注册字段、API 规范化、同一线路正文的 MD5、返回 ID 在签名与头中的一致性、跨阶段 UTDID 变化、越界/额外查询/错误方法/账号 Cookie 拒绝、返回 ID JSON 解析、WUA int ABI 与默认参数、错误码脱敏，以及 UMID 异常时继续 WUA。发送测试只使用建连前必须拒绝的请求，测试不访问服务端。
 
 版本 6 仍需用户在 ios-campus-original-probe 工作流构建新的 CampusOriginalProbe.dylib。Windows 只运行 Python 打包回归和 Bash 语法检查，没有运行 Xcode 原生编译或这些原生桩；真实设备注册与 ID 复用结果待新 IPA 的真机报告。旧版本文段中的联网边界对应当时的版本，当前界面以版本 6 的三个任务说明为准。
+
+
+## 版本 7：修正注册 API getter
+
+用户版本 6 真机报告确认：原配 SDK 初始化成功、匿名配置 HTTP 200 / SUCCESS、UMID getter 返回非空且与本次 x-umt 相同、候选完整 WUA 返回非空且与 x-mini-wua 不同。最后停在“注册 API 原入口：原名称不符合已核对 API；未发送”，没有注册或复用的服务器响应。
+
+根因是诊断实现混淆了外层与内部请求对象：MtopExtRequest 的读取方法是 getApiName（0x104b88d94）和 getApiVersion；getApiName 内部读取 mrequest，再调用内部 TBSDKRequest.apiName。版本 6 对外层调用 apiName，类型检查失败导致读到 nil，却输出了笼统名称错误。此前桩也错误提供 apiName，掩盖了问题。它不是 SDK 初始化失败，也不是服务端拒绝注册。
+
+版本 7 改用外层 getApiName/getApiVersion，分别报告方法类型、空值/类型、名称和版本问题；名称仅接受已核对注册 API，版本只接受 4.0，再使用原对象返回值签名。没有直接硬编码一个签名名称来跳过对照。桩只提供真实外层 getter，明确断言外层不响应 apiName，并增加错误名称、空值、非字符串和错误版本四类签名前阻断测试，保留整个版本 6 综合检查。
+
+同时离线重新核对固定原样本的 16 个相关类/实例方法及参数编码，包括两个注册 getter、原请求初始化、Open 管理器的组件入口、UMID、安全体 int ABI、设备入口、编码入口和 AppInfo 参数入口。Windows 的 8 项 Python 打包回归与 Bash 语法检查通过；新增原生桩和真机注册/复用仍由下一次构建与报告验证。版本 6 的 WUA 结果只是本地候选生成成功，不能代替登录接口验收。

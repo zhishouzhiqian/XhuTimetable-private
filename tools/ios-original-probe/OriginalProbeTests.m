@@ -19,6 +19,7 @@ static NSUInteger ProbeTestConfigSignCalls;
 static NSUInteger ProbeTestLegacyIDCalls, ProbeTestDeviceMode, ProbeTestMtopReadCount;
 static NSUInteger ProbeTestCredentialMode, ProbeTestWUACalls, ProbeTestRegisterSignCalls;
 static NSString *ProbeTestLastSignInput;
+static NSUInteger ProbeTestRequestMode;
 
 static NSString *ResultForStep(NSArray *rows, NSString *step) {
     // 同一步会先追加“正在执行”，再追加最终结果；断言必须读取最后一条。
@@ -209,15 +210,24 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
 + (NSString *)tbsdkMacaddress { return @"02:00:00:00:00:00"; }
 @end
 @interface MtopExtRequest : NSObject
-@property(nonatomic, copy) NSString *apiName;
+@property(nonatomic, copy) NSString *normalizedAPI;
 - (instancetype)initWithApiName:(NSString *)api apiVersion:(NSString *)version;
+- (NSString *)getApiName;
+- (NSString *)getApiVersion;
 @end
 @implementation MtopExtRequest
 - (instancetype)initWithApiName:(NSString *)api apiVersion:(NSString *)version {
     self = [super init];
-    if (self) { NSCAssert([version isEqual:@"4.0"], @"注册版本错误"); self.apiName = api.lowercaseString; }
+    if (self) { NSCAssert([version isEqual:@"4.0"], @"注册版本错误"); self.normalizedAPI = api.lowercaseString; }
     return self;
 }
+- (NSString *)getApiName {
+    if (ProbeTestRequestMode == 1) return @"SECRET_OTHER_API";
+    if (ProbeTestRequestMode == 2) return nil;
+    if (ProbeTestRequestMode == 4) return (id)@123;
+    return self.normalizedAPI;
+}
+- (NSString *)getApiVersion { return ProbeTestRequestMode == 3 ? @"SECRET_OTHER_VERSION" : @"4.0"; }
 @end
 
 int main(void) {
@@ -299,6 +309,14 @@ int main(void) {
                 [ResultForStep(results, @"候选完整 WUA") containsString:@"非空值"], @"WUA 成败判定错误或 UMID 异常阻断 WUA");
         }
         NSCAssert(ProbeTestWUACalls == 4, @"独立凭据诊断未完整执行");
+        NSCAssert(![[MtopExtRequest alloc] respondsToSelector:NSSelectorFromString(@"apiName")],
+            @"桩错误提供了只有内部请求对象才有的 apiName getter");
+        for (NSUInteger mode = 1; mode <= 4; mode++) {
+            ProbeTestRequestMode = mode;
+            NSCAssert(CampusOriginalProbeTestDeviceRequest(context, identity, nil, CampusOriginalPurposeRegister) == nil &&
+                ProbeTestRegisterSignCalls == 0, @"错误 API 名称、类型或版本未在签名前阻断");
+        }
+        ProbeTestRequestMode = 0;
         NSURLRequest *registration = CampusOriginalProbeTestDeviceRequest(context, identity, nil, CampusOriginalPurposeRegister);
         NSCAssert(registration && ProbeTestRegisterSignCalls == 1, @"原设备入口不能构造注册请求");
         NSURLComponents *registrationURL = [NSURLComponents componentsWithURL:registration.URL resolvingAgainstBaseURL:YES];

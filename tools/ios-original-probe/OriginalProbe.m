@@ -331,13 +331,23 @@ static NSURLRequest *ProbeDeviceRequest(NSDictionary *context, NSDictionary *ide
         }
         // init 方法按 ARC 的初始化所有权约定调用，不通过普通返回值 cast。
         original = [original initWithApiName:CampusOriginalRegisterAPI apiVersion:@"4.0"];
-        SEL apiName = NSSelectorFromString(@"apiName");
-        id actualAPI = ProbeMethod(original, apiName, @[], NO) ? ((id (*)(id, SEL))objc_msgSend)(original, apiName) : nil;
-        if (![actualAPI isEqual:CampusOriginalRegisterAPI] && ![actualAPI isEqual:CampusOriginalRegisterAPI.lowercaseString]) {
-            emit(@"注册 API 原入口", @"原名称不符合已核对 API；未发送"); return nil;
+        // 外层 MtopExtRequest 用 getApiName/getApiVersion，内部 TBSDKRequest 才用 apiName/apiVersion。
+        SEL apiName = NSSelectorFromString(@"getApiName"), apiVersion = NSSelectorFromString(@"getApiVersion");
+        if (!ProbeMethod(original, apiName, @[], NO) || !ProbeMethod(original, apiVersion, @[], NO)) {
+            emit(@"注册 API 原入口", @"原 getApiName/getApiVersion 方法类型未通过；未发送"); return nil;
         }
-        api = actualAPI; version = @"4.0";
-        emit(@"注册 API 原入口", [api isEqual:CampusOriginalRegisterAPI] ? @"保留原 API 大小写；网关路径小写" : @"原请求对象已转小写；使用原返回值签名");
+        id actualAPI = ((id (*)(id, SEL))objc_msgSend)(original, apiName);
+        id actualVersion = ((id (*)(id, SEL))objc_msgSend)(original, apiVersion);
+        if (![actualAPI isEqual:CampusOriginalRegisterAPI] && ![actualAPI isEqual:CampusOriginalRegisterAPI.lowercaseString]) {
+            emit(@"注册 API 原入口", [actualAPI isKindOfClass:NSString.class] && [actualAPI length] ?
+                @"原 getApiName 返回名称不符合已核对 API；未发送" : @"原 getApiName 返回空值或类型不符；未发送"); return nil;
+        }
+        if (![actualVersion isKindOfClass:NSString.class] || ![actualVersion isEqual:@"4.0"]) {
+            emit(@"注册 API 原入口", @"原 getApiVersion 返回值未通过 4.0 对照；未发送"); return nil;
+        }
+        api = actualAPI; version = actualVersion;
+        emit(@"注册 API 原入口", [api isEqual:CampusOriginalRegisterAPI] ? @"原 getApiName/getApiVersion 通过；保留原 API 大小写；网关路径小写" :
+            @"原 getApiName/getApiVersion 通过；原请求对象已转小写；使用原返回值签名");
         emit(@"iOS 注册设备参数", @"原 UIDevice 分类返回值；10 个原 iOS 字段；不展示标识或正文");
     }
     NSString *time = [NSString stringWithFormat:@"%lld", (long long)NSDate.date.timeIntervalSince1970];
@@ -464,7 +474,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     self.report = [[UITextView alloc] init];
     self.report.editable = NO;
     self.report.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.report.text = @"诊断版本：6\n当前运行专用 Application/AppDelegate\n\n离线检查：开启飞行模式并关闭 Wi-Fi。\n联网检查：先连接网络，再手动点击下方联网按钮。检查本地 WUA/UMID，并依次查询匿名配置、注册设备、带返回设备 ID 再查配置；最多三个任务。不登录、不下单。\n原二进制的类加载代码仍可能执行。\n\n每项检查每个进程只执行一次。";
+    self.report.text = @"诊断版本：7\n当前运行专用 Application/AppDelegate\n\n离线检查：开启飞行模式并关闭 Wi-Fi。\n联网检查：先连接网络，再手动点击下方联网按钮。检查本地 WUA/UMID，并依次查询匿名配置、注册设备、带返回设备 ID 再查配置；最多三个任务。不登录、不下单。\n原二进制的类加载代码仍可能执行。\n\n每项检查每个进程只执行一次。";
     [stack addArrangedSubview:self.report];
     self.start = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.start setTitle:@"开始本地检查" forState:UIControlStateNormal];
@@ -488,7 +498,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：6\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：7\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
@@ -512,7 +522,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：6\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：7\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
