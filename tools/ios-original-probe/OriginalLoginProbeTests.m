@@ -101,7 +101,8 @@ void CampusOriginalLoginProbeTests(void) {
         CampusOriginalReadBody(CampusOriginalPurposeHistory, nil),
         CampusOriginalReadBody(CampusOriginalPurposeBuildings, nil),
         CampusOriginalReadBody(CampusOriginalPurposeDevices, nil),
-        CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, listedDevice)];
+        CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, listedDevice),
+        CampusOriginalReadBody(CampusOriginalPurposeOrderDetail, @{@"bizOrderId": @"123", @"mixBuyerId": @"456", @"isvOrderId": @"789"})];
     for (NSUInteger i = 0; i < bodies.count; i++) {
         CampusOriginalPurpose purpose = (CampusOriginalPurpose)(CampusOriginalPurposeLogin + i);
         NSString *reason = nil;
@@ -177,7 +178,7 @@ void CampusOriginalLoginProbeTests(void) {
     NSMutableDictionary *wrongDetail = [listedDevice mutableCopy]; wrongDetail[@"resNo"] = @"invalid&identifier";
     NSCAssert(CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, wrongDetail) == nil, @"无效列表设备未阻断");
 
-    for (CampusOriginalPurpose purpose = CampusOriginalPurposeHistory; purpose <= CampusOriginalPurposeDeviceInfo; purpose++) {
+    for (CampusOriginalPurpose purpose = CampusOriginalPurposeHistory; purpose <= CampusOriginalPurposeOrderDetail; purpose++) {
         NSString *valid = CampusOriginalReadBody(purpose, listedDevice);
         NSMutableDictionary *envelope = [[NSJSONSerialization JSONObjectWithData:[valid dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] mutableCopy];
         NSMutableDictionary *payload = [[NSJSONSerialization JSONObjectWithData:[envelope[@"requestJson"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] mutableCopy];
@@ -192,5 +193,22 @@ void CampusOriginalLoginProbeTests(void) {
         badBody = [[NSString alloc] initWithData:LoginTestData(envelope) encoding:NSUTF8StringEncoding];
         NSCAssert(CampusOriginalAccountRequest(identity, @"1800000000", badBody, factors, session, purpose, encode, nil) == nil, @"创建请求混入只读范围");
     }
+
+    NSDictionary *manualDevice = @{@"resNo": @"TEST_DEVICE"};
+    NSString *manualBody = CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, manualDevice);
+    NSDictionary *manualEnvelope = [NSJSONSerialization JSONObjectWithData:[manualBody dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *manualQuery = [NSJSONSerialization JSONObjectWithData:[manualEnvelope[@"requestJson"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSCAssert([manualQuery[@"resNo"] isEqual:@"TEST_DEVICE"] && !manualQuery[@"deviceId"] && [manualQuery[@"needAutoSendCoupon"] isEqual:@NO], @"手填机器编号不能直查或自动领券未关闭");
+    NSCAssert(CampusOriginalProbeTestAccountRequest(identity, manualBody, session, CampusOriginalPurposeDeviceInfo) != nil, @"手填机器编号未通过签名/发送核对");
+    NSData *historyWithOrder = LoginTestData(@{@"data": @{@"fail": @NO, @"data": @{@"orderListResponses": @[
+        @{@"bizOrderIdStr": @123, @"mixBuyerId": @"456", @"isvOrderId": @"789", @"deviceName": @"SECRET_DEVICE_NAME"}]}}});
+    NSDictionary *historyEvidence = CampusOriginalAccountEvidence(historyWithOrder, CampusOriginalPurposeHistory);
+    NSDictionary *selectedOrder = historyEvidence[@"order"];
+    NSCAssert([selectedOrder isEqual:(@{@"bizOrderId": @"123", @"mixBuyerId": @"456", @"isvOrderId": @"789"})] && ![historyEvidence.description containsString:@"SECRET"], @"历史订单身份转换或最小字段选择错误");
+    NSCAssert(CampusOriginalReadBody(CampusOriginalPurposeOrderDetail, selectedOrder) != nil && CampusOriginalReadBody(CampusOriginalPurposeOrderDetail, @{@"bizOrderId": @"123"}) == nil, @"详情缺少列表身份未阻断");
+    NSDictionary *orderEvidence = CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @"false", @"data": @{@"response":
+        @{@"bizOrderIdStr": @123, @"payStatus": @"SUCCEED", @"fulfilStatus": @"COMPLETED", @"address": @"SECRET_ADDRESS"}}}}), CampusOriginalPurposeOrderDetail);
+    NSCAssert([orderEvidence[@"verified"] boolValue] && [orderEvidence[@"bizOrderId"] isEqual:@"123"] && ![orderEvidence.description containsString:@"SECRET"], @"订单详情身份或脱敏不正确");
+    NSCAssert(CampusOriginalAccountEvidence(LoginTestData(@{@"data": @{@"fail": @NO, @"data": @{@"response": @{@"bizOrderId": @"123"}}}}), CampusOriginalPurposeOrderDetail) == nil, @"缺少支付/履约字段的详情被接受");
 
 }

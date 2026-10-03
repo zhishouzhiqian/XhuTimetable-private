@@ -84,6 +84,7 @@ NSString *CampusOriginalAccountAPI(CampusOriginalPurpose purpose) {
     if (purpose == CampusOriginalPurposeBuildings) return @"mtop.tmall.campus.share.applet.building.list";
     if (purpose == CampusOriginalPurposeDevices) return @"mtop.tmall.campus.share.applet.device.list";
     if (purpose == CampusOriginalPurposeDeviceInfo) return @"mtop.tmall.campus.share.applet.general.device.info";
+    if (purpose == CampusOriginalPurposeOrderDetail) return @"mtop.tmall.campus.share.applet.general.order.detail.get";
     return nil;
 }
 
@@ -110,9 +111,19 @@ NSString *CampusOriginalReadBody(CampusOriginalPurpose purpose, NSDictionary *de
     } else if (purpose == CampusOriginalPurposeDevices) {
         type = @"USER_DEVICE_LIST"; query = @{@"pageNum": @1, @"pageSize": @20, @"deviceType": @"COMMONLY_USED_DEVICE", @"choose": @YES};
     } else if (purpose == CampusOriginalPurposeDeviceInfo) {
-        if (!AccountDeviceCode(device[@"resNo"]) || !AccountText(device[@"deviceId"], 128)) return nil;
-        type = @"DEVICE_INFO_GET"; query = @{@"isv": @"CAMPUS", @"businessType": @"WASH_AND_CARE", @"resNo": device[@"resNo"],
-            @"deviceId": device[@"deviceId"], @"needAutoSendCoupon": @NO, @"paymentChannel": @"TMXY_APP"};
+        if (!AccountDeviceCode(device[@"resNo"]) || (device[@"deviceId"] && !AccountUID(device[@"deviceId"]))) return nil;
+        type = @"DEVICE_INFO_GET";
+        NSMutableDictionary *input = [@{@"isv": @"CAMPUS", @"businessType": @"WASH_AND_CARE", @"resNo": device[@"resNo"],
+            @"needAutoSendCoupon": @NO, @"paymentChannel": @"TMXY_APP"} mutableCopy];
+        if (device[@"deviceId"]) input[@"deviceId"] = device[@"deviceId"];
+        query = input;
+    } else if (purpose == CampusOriginalPurposeOrderDetail) {
+        NSMutableDictionary *input = [@{@"isv": @"CAMPUS", @"businessType": @"WASH_AND_CARE"} mutableCopy];
+        for (NSString *key in @[@"bizOrderId", @"mixBuyerId", @"isvOrderId"]) {
+            if (!AccountUID(device[key])) return nil;
+            input[key] = device[key];
+        }
+        type = @"ORDER_DETAIL_GET"; query = input;
     }
     if (!query) return nil;
     NSData *inner = [NSJSONSerialization dataWithJSONObject:query options:0 error:nil];
@@ -130,10 +141,9 @@ static NSDictionary *AccountJSON(NSString *body) {
 static BOOL AccountBodyValid(NSString *body, CampusOriginalPurpose purpose, NSDictionary *identity) {
     NSDictionary *object = AccountJSON(body);
     if (purpose == CampusOriginalPurposeProfile) return [object isEqual:@{@"platForm": @"ios"}];
-    if (purpose >= CampusOriginalPurposeOrders && purpose <= CampusOriginalPurposeDeviceInfo) {
+    if (purpose >= CampusOriginalPurposeOrders && purpose <= CampusOriginalPurposeOrderDetail) {
         NSDictionary *query = AccountJSON(object[@"requestJson"]);
-        NSDictionary *device = purpose == CampusOriginalPurposeDeviceInfo && query ?
-            @{@"resNo": query[@"resNo"] ?: NSNull.null, @"deviceId": query[@"deviceId"] ?: NSNull.null} : nil;
+        NSDictionary *device = (purpose == CampusOriginalPurposeDeviceInfo || purpose == CampusOriginalPurposeOrderDetail) ? query : nil;
         NSDictionary *expected = AccountJSON(CampusOriginalReadBody(purpose, device));
         return expected && object.count == 2 && [object[@"requestType"] isEqual:expected[@"requestType"]] &&
             [query isEqual:AccountJSON(expected[@"requestJson"])];
@@ -237,6 +247,13 @@ NSDictionary *CampusOriginalAccountEvidence(NSData *body, CampusOriginalPurpose 
         id page = data[@"pageResult"];
         if (![page isKindOfClass:NSDictionary.class] || !AccountBoolean(page[@"success"], YES)) return nil;
         rows = page[@"data"]; maximum = 20;
+    } else if (purpose == CampusOriginalPurposeOrderDetail) {
+        if (!AccountBoolean(data[@"fail"], NO) || ![inner isKindOfClass:NSDictionary.class]) return nil;
+        id detail = inner[@"response"];
+        if (![detail isKindOfClass:NSDictionary.class]) return nil;
+        NSString *orderID = AccountUID(detail[@"bizOrderIdStr"] ?: detail[@"bizOrderId"]);
+        if (!orderID || !AccountText(detail[@"payStatus"], 128) || !AccountText(detail[@"fulfilStatus"], 128)) return nil;
+        return @{@"verified": @YES, @"bizOrderId": orderID};
     } else if (purpose == CampusOriginalPurposeDeviceInfo) {
         if (!AccountBoolean(data[@"fail"], NO) || ![inner isKindOfClass:NSDictionary.class]) return nil;
         id device = inner[@"deviceResponse"];
@@ -263,6 +280,14 @@ NSDictionary *CampusOriginalAccountEvidence(NSData *body, CampusOriginalPurpose 
         if (![rows isKindOfClass:NSArray.class] || [rows count] > maximum) return nil;
         for (id row in rows) if (![row isKindOfClass:NSDictionary.class]) return nil;
         NSMutableDictionary *evidence = [@{@"verified": @YES, @"count": @([rows count])} mutableCopy];
+        if (purpose == CampusOriginalPurposeHistory || purpose == CampusOriginalPurposeOrders) for (NSDictionary *row in rows) {
+            NSMutableDictionary *order = [NSMutableDictionary dictionary];
+            for (NSString *key in @[@"bizOrderId", @"mixBuyerId", @"isvOrderId"]) {
+                id value = [key isEqual:@"bizOrderId"] ? (row[@"bizOrderIdStr"] ?: row[key]) : row[key];
+                NSString *text = AccountUID(value); if (text) order[key] = text;
+            }
+            if (order.count == 3) { evidence[@"order"] = [order copy]; break; }
+        }
         if (purpose == CampusOriginalPurposeDevices) for (NSDictionary *row in rows) {
             NSString *deviceID = AccountUID(row[@"deviceId"]);
             if (AccountDeviceCode(row[@"deviceCode"]) && deviceID) {
@@ -306,7 +331,8 @@ NSString *CampusOriginalAccountShape(NSData *body, CampusOriginalPurpose purpose
     } else if (purpose == CampusOriginalPurposeBuildings) leaf = inner;
     else {
         key = purpose == CampusOriginalPurposeOrders ? @"urgentOrderListResponse" :
-            purpose == CampusOriginalPurposeHistory ? @"orderListResponses" : @"deviceResponse";
+            purpose == CampusOriginalPurposeHistory ? @"orderListResponses" :
+            purpose == CampusOriginalPurposeOrderDetail ? @"response" : @"deviceResponse";
         leaf = [inner isKindOfClass:NSDictionary.class] ? inner[key] : nil;
     }
     NSString *flag = purpose == CampusOriginalPurposeDevices ? @"pageResult.success" : @"fail";

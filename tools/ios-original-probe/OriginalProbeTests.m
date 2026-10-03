@@ -59,7 +59,7 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
     BOOL config = [parameters[@"api"] isEqualToString:CampusOriginalConfigAPI];
     BOOL registration = [parameters[@"api"] isEqualToString:CampusOriginalRegisterAPI];
     BOOL account = NO;
-    for (CampusOriginalPurpose purpose = CampusOriginalPurposeLogin; purpose <= CampusOriginalPurposeDeviceInfo; purpose++) {
+    for (CampusOriginalPurpose purpose = CampusOriginalPurposeLogin; purpose <= CampusOriginalPurposeOrderDetail; purpose++) {
         if ([parameters[@"api"] isEqual:CampusOriginalAccountAPI(purpose)]) account = YES;
     }
     NSCAssert([parameters[@"appkey"] isEqualToString:@"TEST_APPKEY_MUST_NOT_APPEAR"] &&

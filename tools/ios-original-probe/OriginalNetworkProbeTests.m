@@ -140,4 +140,10 @@ void CampusOriginalNetworkProbeTests(void) {
     NSCAssert(![CampusOriginalConfigOutcome(200, ok, 0, NO, YES)[@"success"] boolValue], @"超限误判成功");
     NSCAssert(![CampusOriginalConfigOutcome(200, ok, -1009, NO, NO)[@"success"] boolValue], @"断网误判成功");
     NSCAssert(![CampusOriginalConfigOutcome(200, [@"invalid-json" dataUsingEncoding:NSUTF8StringEncoding], 0, NO, NO)[@"success"] boolValue], @"无效 JSON 误判成功");
+    for (NSString *code in @[@"FAIL_SYS_API_NOT_FOUNDED", @"FAIL_SYS_API_UNAUTHORIZED", @"FAIL_SYS_INVALID_HTTP_METHOD", @"FAIL_SYS_BIZPARAM_TYPE_ERROR"]) {
+        NSData *body = [NSJSONSerialization dataWithJSONObject:@{@"ret": @[[code stringByAppendingString:@"::SECRET_ERROR_BODY"]]} options:0 error:nil];
+        NSDictionary *result = CampusOriginalConfigOutcome(200, body, 0, NO, NO);
+        NSCAssert(![result[@"success"] boolValue] && [result[@"summary"] containsString:code] && ![result.description containsString:@"SECRET"], @"原组件已知错误仍被归为 UNKNOWN 或泄露正文");
+    }
+
 }

@@ -24,7 +24,7 @@
     [close addTarget:self action:@selector(cancel) forControlEvents:UIControlEventTouchUpInside];
     self.status = [[UILabel alloc] init]; self.status.numberOfLines = 0;
     self.status.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
-    self.status.text = @"请在官方页面手动完成本人验证码登录。诊断不读取输入值；取得一次性授权结果后，只交换校园会话并查询本人资料、运行/历史订单、关联楼栋及设备状态和程序。";
+    self.status.text = @"请在官方页面手动完成本人验证码登录。诊断不读取输入值；取得一次性授权结果后，只交换校园会话并查询本人资料、运行/历史订单及详情、关联楼栋及设备状态和程序。";
     UIStackView *stack = [[UIStackView alloc] initWithArrangedSubviews:@[close, self.status, self.web]];
     stack.axis = UILayoutConstraintAxisVertical; stack.spacing = 8; stack.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:stack];
