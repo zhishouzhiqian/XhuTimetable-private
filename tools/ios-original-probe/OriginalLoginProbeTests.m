@@ -63,6 +63,14 @@ NSString *CampusOriginalProbeTestLastInput(void);
 
 static NSData *LoginTestData(id object) { return [NSJSONSerialization dataWithJSONObject:object options:0 error:nil]; }
 
+static NSDictionary *LoginTestObject(NSString *text) {
+    NSCAssert([text isKindOfClass:NSString.class] && text.length > 0, @"测试前置条件：JSON 正文未构造成功；不能解析空数据");
+    NSError *error = nil;
+    id object = [NSJSONSerialization JSONObjectWithData:[text dataUsingEncoding:NSUTF8StringEncoding] options:0 error:&error];
+    NSCAssert(!error && [object isKindOfClass:NSDictionary.class], @"测试前置条件：正文必须为有效 JSON 对象");
+    return object;
+}
+
 void CampusOriginalLoginProbeTests(void) {
     NSString *code = @"TEST_AUTHORIZATION_CODE_123456";
     NSString *callback = [NSString stringWithFormat:@"https://www.alipay.com/webviewbridge?action=taobao_auth_token&top_auth_code=%@", code];
@@ -82,10 +90,10 @@ void CampusOriginalLoginProbeTests(void) {
     identity[@"unified"] = [NSClassFromString(@"ProbeOriginalUnified") new];
     NSString *body = CampusOriginalProbeTestLoginBody(identity, code);
     NSCAssert(body && ![body containsString:@"OLD_ACCOUNT"] && ![body containsString:@"OLD_COOKIE"], @"原模型构造失败或旧会话进入登录正文");
-    NSDictionary *outer = [NSJSONSerialization JSONObjectWithData:[body dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *outer = LoginTestObject(body);
     NSCAssert([outer[@"snsLoginInfo"] isKindOfClass:NSString.class] && [outer[@"riskControlInfo"] isKindOfClass:NSString.class], @"外层登录字段未保持 JSON 字符串");
-    NSDictionary *info = [NSJSONSerialization JSONObjectWithData:[outer[@"snsLoginInfo"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
-    NSDictionary *risk = [NSJSONSerialization JSONObjectWithData:[outer[@"riskControlInfo"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *info = LoginTestObject(outer[@"snsLoginInfo"]);
+    NSDictionary *risk = LoginTestObject(outer[@"riskControlInfo"]);
     NSCAssert([info[@"useAcitonType"] isEqual:@YES] && [info[@"useDeviceToken"] isEqual:@YES] &&
         [info[@"site"] isEqual:@"96"] && [risk[@"t"] length] == 13, @"原 iOS 开关对象、site 字符串或时间契约改变");
     NSMutableDictionary *wrong = [info mutableCopy]; wrong[@"deviceId"] = @"OLD_DEVICE";
@@ -96,13 +104,14 @@ void CampusOriginalLoginProbeTests(void) {
     NSDictionary *factors = @{@"x-sign": @"SECRET_SIGN", @"x-mini-wua": @"SECRET_MINI", @"x-umt": @"SECRET_UMT", @"x-sgext": @"SECRET_SGEXT"};
     NSDictionary *session = @{@"sid": @"SECRET_SID+/=", @"uid": @"123456"};
     NSDictionary *listedDevice = @{@"resNo": @"TEST_DEVICE", @"deviceId": @"12345"};
+    NSDictionary *listedOrder = @{@"bizOrderId": @"123", @"mixBuyerId": @"456", @"isvOrderId": @"789"};
     NSArray *bodies = @[body, @"{\"platForm\":\"ios\"}",
         CampusOriginalReadBody(CampusOriginalPurposeOrders, nil),
         CampusOriginalReadBody(CampusOriginalPurposeHistory, nil),
         CampusOriginalReadBody(CampusOriginalPurposeBuildings, nil),
         CampusOriginalReadBody(CampusOriginalPurposeDevices, nil),
         CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, listedDevice),
-        CampusOriginalReadBody(CampusOriginalPurposeOrderDetail, @{@"bizOrderId": @"123", @"mixBuyerId": @"456", @"isvOrderId": @"789"})];
+        CampusOriginalReadBody(CampusOriginalPurposeOrderDetail, listedOrder)];
     for (NSUInteger i = 0; i < bodies.count; i++) {
         CampusOriginalPurpose purpose = (CampusOriginalPurpose)(CampusOriginalPurposeLogin + i);
         NSString *reason = nil;
@@ -172,16 +181,18 @@ void CampusOriginalLoginProbeTests(void) {
     NSDictionary *detailEvidence = CampusOriginalAccountEvidence(LoginTestData(detail), CampusOriginalPurposeDeviceInfo);
     NSCAssert([detailEvidence[@"programs"] isEqual:@1] && [detailEvidence[@"canUse"] boolValue] && ![detailEvidence.description containsString:@"SECRET"], @"开放洗衣程序统计或脱敏未通过");
     NSCAssert(CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, nil) == nil, @"没有列表设备仍构造详情");
-    NSDictionary *history = [NSJSONSerialization JSONObjectWithData:[bodies[3] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
-    NSDictionary *query = [NSJSONSerialization JSONObjectWithData:[history[@"requestJson"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *history = LoginTestObject(bodies[3]);
+    NSDictionary *query = LoginTestObject(history[@"requestJson"]);
     NSCAssert([query[@"pageNum"] isEqual:@1] && [query[@"pageSize"] isEqual:@10] && [query[@"isQueryToPayOrderList"] isEqual:@NO], @"只读历史范围扩大到额外分页或待支付查询");
     NSMutableDictionary *wrongDetail = [listedDevice mutableCopy]; wrongDetail[@"resNo"] = @"invalid&identifier";
     NSCAssert(CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, wrongDetail) == nil, @"无效列表设备未阻断");
 
     for (CampusOriginalPurpose purpose = CampusOriginalPurposeHistory; purpose <= CampusOriginalPurposeOrderDetail; purpose++) {
-        NSString *valid = CampusOriginalReadBody(purpose, listedDevice);
-        NSMutableDictionary *envelope = [[NSJSONSerialization JSONObjectWithData:[valid dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] mutableCopy];
-        NSMutableDictionary *payload = [[NSJSONSerialization JSONObjectWithData:[envelope[@"requestJson"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil] mutableCopy];
+        // 订单详情需要订单身份，不能复用设备编号 fixture。
+        NSDictionary *selection = purpose == CampusOriginalPurposeOrderDetail ? listedOrder : listedDevice;
+        NSString *valid = CampusOriginalReadBody(purpose, selection);
+        NSMutableDictionary *envelope = [LoginTestObject(valid) mutableCopy];
+        NSMutableDictionary *payload = [LoginTestObject(envelope[@"requestJson"]) mutableCopy];
         if (purpose == CampusOriginalPurposeHistory || purpose == CampusOriginalPurposeDevices) payload[@"pageNum"] = @2;
         else if (purpose == CampusOriginalPurposeDeviceInfo) payload[@"needAutoSendCoupon"] = @YES;
         else payload[@"businessType"] = @"OTHER_BUSINESS";
@@ -196,8 +207,8 @@ void CampusOriginalLoginProbeTests(void) {
 
     NSDictionary *manualDevice = @{@"resNo": @"TEST_DEVICE"};
     NSString *manualBody = CampusOriginalReadBody(CampusOriginalPurposeDeviceInfo, manualDevice);
-    NSDictionary *manualEnvelope = [NSJSONSerialization JSONObjectWithData:[manualBody dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
-    NSDictionary *manualQuery = [NSJSONSerialization JSONObjectWithData:[manualEnvelope[@"requestJson"] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    NSDictionary *manualEnvelope = LoginTestObject(manualBody);
+    NSDictionary *manualQuery = LoginTestObject(manualEnvelope[@"requestJson"]);
     NSCAssert([manualQuery[@"resNo"] isEqual:@"TEST_DEVICE"] && !manualQuery[@"deviceId"] && [manualQuery[@"needAutoSendCoupon"] isEqual:@NO], @"手填机器编号不能直查或自动领券未关闭");
     NSCAssert(CampusOriginalProbeTestAccountRequest(identity, manualBody, session, CampusOriginalPurposeDeviceInfo) != nil, @"手填机器编号未通过签名/发送核对");
     NSData *historyWithOrder = LoginTestData(@{@"data": @{@"fail": @NO, @"data": @{@"orderListResponses": @[
