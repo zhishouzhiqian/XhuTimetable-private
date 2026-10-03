@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdlib.h>
 #import "../../iosApp/iosApp/CampusMtopProbeInput.h"
+#import "OriginalNetworkProbe.h"
 
 #ifndef CAMPUS_ORIGINAL_PROBE_TEST
 #import <UIKit/UIKit.h>
@@ -37,14 +38,16 @@ static NSString *ProbeSHA(NSData *data) {
     return text;
 }
 
-NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
-    NSDictionary *manifest, NSString *resourceRoot, void (^progress)(NSArray *)) {
+static NSArray<NSDictionary<NSString *, NSString *> *> *ProbeRun(
+    NSDictionary *manifest, NSString *resourceRoot, void (^progress)(NSArray *),
+    BOOL signLocally, NSDictionary *__autoreleasing *context) {
     NSMutableArray *rows = [NSMutableArray array];
     void (^emit)(NSString *, NSString *) = ^(NSString *step, NSString *result) {
         [rows addObject:@{@"step": step, @"result": result}];
         if (progress) progress([rows copy]);
     };
-    emit(@"诊断方式", @"原程序内组件；默认资源入口；本地初始化及两次离线签名，不发送请求");
+    emit(@"诊断方式", signLocally ? @"原程序内组件；默认资源入口；本地初始化及两次离线签名，不发送请求" :
+        @"原程序内组件；准备本次匿名配置查询；默认资源入口");
     @try {
         BOOL resourcesValid = [manifest isKindOfClass:NSDictionary.class] &&
             [manifest[@"version"] isEqual:@1] &&
@@ -112,6 +115,10 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
             emit(@"统一签名初始化", ready && error == nil ? @"成功" : error ?
                 [NSString stringWithFormat:@"失败（SDK 错误码 %ld）", (long)error.code] : @"失败；未提供错误码");
         } else emit(@"统一签名初始化", @"方法类型不匹配；未调用");
+        if (!signLocally) {
+            if (initialized && appKey.length && context) *context = @{@"appKey": appKey, @"unified": unified};
+            return [rows copy];
+        }
         SEL factorsSelector = NSSelectorFromString(@"getSecurityFactors:error:");
         if (!initialized || !appKey.length) {
             emit(@"离线签名", @"跳过：初始化未成功或 AppKey 为空");
@@ -158,10 +165,105 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
     return [rows copy];
 }
 
+NSArray *CampusOriginalProbeRun(NSDictionary *manifest, NSString *resourceRoot, void (^progress)(NSArray *)) {
+    return ProbeRun(manifest, resourceRoot, progress, YES, NULL);
+}
+
+// SDK/设备参数仅存在本次函数及请求内存中；不保存候选 URL 或安全字段。
+static NSURLRequest *ProbeAnonymousRequest(NSDictionary *context, void (^emit)(NSString *, NSString *)) {
+    Class utdidClass = NSClassFromString(@"UTDIDMain");
+    SEL identifier = NSSelectorFromString(@"uniqueGlobalDeviceIdentifier");
+    if (!ProbeMethod(utdidClass, identifier, @[], NO)) {
+        emit(@"设备上下文", @"原 UTDID 入口类型不匹配；未发送"); return nil;
+    }
+    id utdid = ((id (*)(id, SEL))objc_msgSend)(utdidClass, identifier);
+    Class appClass = NSClassFromString(@"AppInfo");
+    NSMutableArray *parts = [NSMutableArray array];
+    for (NSString *name in @[@"channel", @"bundleName", @"version"]) {
+        SEL selector = NSSelectorFromString(name);
+        id value = ProbeMethod(appClass, selector, @[], NO) ? ((id (*)(id, SEL))objc_msgSend)(appClass, selector) : nil;
+        if (![value isKindOfClass:NSString.class] || ![value length]) {
+            emit(@"应用协议参数", @"原 AppInfo 参数缺失；未发送"); return nil;
+        }
+        [parts addObject:value];
+    }
+    NSString *ttid = [NSString stringWithFormat:@"%@@%@_iPhone_%@", parts[0], parts[1], parts[2]];
+    SEL keySelector = NSSelectorFromString(@"appKey");
+    id networkKey = ProbeMethod(appClass, keySelector, @[], NO) ?
+        ((id (*)(id, SEL))objc_msgSend)(appClass, keySelector) : nil;
+    if (![networkKey isKindOfClass:NSString.class] || ![networkKey length]) {
+        emit(@"校园请求 AppKey", @"原 AppInfo 入口不可用；未发送"); return nil;
+    }
+    emit(@"校园请求 AppKey", [networkKey isEqualToString:context[@"appKey"]] ?
+        @"原 AppInfo 返回值与索引 0 一致（值不展示）" : @"原 AppInfo 返回值与索引 0 不同；请求使用原 AppInfo 值（均不展示）");
+    Class encoder = NSClassFromString(@"TBSDKMTOPEnvConfig");
+    SEL encode = NSSelectorFromString(@"urlEncodeString:");
+    if (!ProbeMethod(encoder, encode, @[@"@"], NO) || ![utdid isKindOfClass:NSString.class] || ![utdid length]) {
+        emit(@"设备与编码入口", @"原 UTDID 或编码方法不可用；未发送"); return nil;
+    }
+    NSString *(^encodeValue)(NSString *) = ^NSString *(NSString *value) {
+        return ((id (*)(id, SEL, id))objc_msgSend)(encoder, encode, value);
+    };
+    // 原 5.7.2 setHTTPRequestHeader 使用 x-pv=6.3；不复制 Android 的 TTID。
+    NSString *time = [NSString stringWithFormat:@"%lld", (long long)NSDate.date.timeIntervalSince1970];
+    NSData *body = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
+    NSString *input = CampusMtopProbeSignData(body, utdid, networkKey, CampusOriginalConfigAPI, @"1.0",
+        @{@"x-t": time, @"x-ttid": ttid});
+    id unified = context[@"unified"];
+    SEL sign = NSSelectorFromString(@"getSecurityFactors:error:");
+    if (!input || !ProbeMethod(unified, sign, @[@"@", @"^@"], NO)) {
+        emit(@"本次配置查询签名", @"输入或接口类型不符合要求；未发送"); return nil;
+    }
+    NSError *error = nil;
+    id factors = ((id (*)(id, SEL, id, NSError *__autoreleasing *))objc_msgSend)(unified, sign,
+        @{@"appkey": networkKey, @"data": input, @"api": CampusOriginalConfigAPI, @"useWua": @NO,
+          @"env": @0, @"extendParas": @{}, @"requestId": NSUUID.UUID.UUIDString}, &error);
+    if (!CampusMtopProbeFactorsComplete(factors, error)) {
+        emit(@"本次配置查询签名", error ? [NSString stringWithFormat:@"失败（SDK 错误码 %ld）；未发送", (long)error.code] :
+            @"字段不完整；未发送"); return nil;
+    }
+    NSURLRequest *request = CampusOriginalConfigRequest(networkKey, utdid, ttid, time, factors, encodeValue);
+    emit(@"设备上下文", @"使用原 UTDID 组件返回值；不展示；未据此认定新设备已注册");
+    emit(@"本次请求一致性", request ? @"固定空正文、时间及设备参数；四个字段完整；原编码入口核对通过" : @"编码或协议核对失败；未发送");
+    return request;
+}
+
+#ifdef CAMPUS_ORIGINAL_PROBE_TEST
+NSURLRequest *CampusOriginalProbeTestRequest(NSDictionary *context) {
+    return ProbeAnonymousRequest(context, ^(NSString *step, NSString *result) {});
+}
+#endif
+
+void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoot,
+                                  void (^progress)(NSArray *), void (^completion)(NSArray *)) {
+    NSDictionary *context = nil;
+    NSMutableArray *rows = [ProbeRun(manifest, resourceRoot, progress, NO, &context) mutableCopy];
+    void (^emit)(NSString *, NSString *) = ^(NSString *step, NSString *result) {
+        [rows addObject:@{@"step": step, @"result": result}];
+        if (progress) progress([rows copy]);
+    };
+    NSURLRequest *request = nil;
+    @try {
+        if (context) request = ProbeAnonymousRequest(context, emit);
+        else emit(@"联网检查", @"初始化或资源未通过；未发送");
+    } @catch (NSException *exception) { emit(@"联网准备", @"发生异常（正文隐藏）；未发送"); }
+    if (!request) { completion([rows copy]); return; }
+    emit(@"联网范围", @"仅一次匿名公开配置任务；无 Cookie、账号或会话；禁止跳转，无应用层自动重试");
+    CampusOriginalConfigSend(request, ^(NSDictionary *outcome) {
+        emit(@"匿名配置响应", outcome[@"summary"]);
+        emit(@"验收结论", [outcome[@"success"] boolValue] ? @"本次匿名配置查询返回 SUCCESS；尚未验证设备注册、登录或洗衣" :
+            @"本次未通过；不继续注册或登录；不能单独据此定位签名、协议或网络原因");
+        completion([rows copy]);
+    });
+}
+
 #ifndef CAMPUS_ORIGINAL_PROBE_TEST
 @interface CampusOriginalProbeController : UIViewController
 @property(nonatomic, strong) UITextView *report;
 @property(nonatomic, strong) UIButton *start;
+@property(nonatomic, strong) UIButton *network;
+@property(nonatomic) BOOL networkStarted;
+@property(nonatomic) BOOL networkFinished;
 @property(nonatomic) BOOL started;
 @property(nonatomic) BOOL finished;
 @end
@@ -188,26 +290,55 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
     self.report = [[UITextView alloc] init];
     self.report.editable = NO;
     self.report.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.report.text = @"请先开启飞行模式，并关闭 Wi-Fi，再开始。\n\n诊断版本：2\n当前运行专用 Application/AppDelegate\n本检查调用原配组件本地初始化及离线签名接口，不发送请求。\n原二进制的类加载代码仍可能执行。\n\n每次新进程只执行一次。";
+    self.report.text = @"诊断版本：3\n当前运行专用 Application/AppDelegate\n\n离线检查：开启飞行模式并关闭 Wi-Fi。\n联网检查：先连接网络，再手动点击下方联网按钮，仅查询一次匿名公开配置，使用原设备标识但不展示，不登录、不注册设备、不下单。\n原二进制的类加载代码仍可能执行。\n\n每项检查每个进程只执行一次。";
     [stack addArrangedSubview:self.report];
     self.start = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.start setTitle:@"开始本地检查" forState:UIControlStateNormal];
     [self.start addTarget:self action:@selector(runProbe) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:self.start];
+    self.network = [UIButton buttonWithType:UIButtonTypeSystem];
+    [self.network setTitle:@"联网检查（仅匿名配置）" forState:UIControlStateNormal];
+    [self.network addTarget:self action:@selector(runNetworkProbe) forControlEvents:UIControlEventTouchUpInside];
+    [stack addArrangedSubview:self.network];
     UIButton *copy = [UIButton buttonWithType:UIButtonTypeSystem];
     [copy setTitle:@"复制诊断报告" forState:UIControlStateNormal];
     [copy addTarget:self action:@selector(copyReport) forControlEvents:UIControlEventTouchUpInside];
     [stack addArrangedSubview:copy];
 }
 - (void)copyReport { UIPasteboard.generalPasteboard.string = self.report.text; }
-- (void)runProbe {
-    if (self.started) return;
-    self.started = YES;
+- (void)runNetworkProbe {
+    if (self.networkStarted || (self.started && !self.finished)) return;
+    self.networkStarted = YES;
+    self.network.enabled = NO;
     self.start.enabled = NO;
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：2\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：3\n当前运行专用 Application/AppDelegate\n\n"];
+        for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
+        self.report.text = text;
+    };
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        CampusOriginalProbeNetworkRun(manifest, root, ^(NSArray *rows) {
+            dispatch_async(dispatch_get_main_queue(), ^{ show(rows); });
+        }, ^(NSArray *rows) {
+            dispatch_async(dispatch_get_main_queue(), ^{ self.networkFinished = YES; show(rows); });
+        });
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 45 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        if (!self.networkFinished) self.report.text = [self.report.text stringByAppendingString:
+            @"\n联网检查超过 45 秒尚未完成；可能停留在 SDK 调用，无法取消该调用。请复制当前报告并彻底关闭应用。\n"];
+    });
+}
+- (void)runProbe {
+    if (self.started || self.networkStarted) return;
+    self.started = YES;
+    self.start.enabled = NO;
+    self.network.enabled = NO;
+    NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
+    NSString *root = NSBundle.mainBundle.bundlePath;
+    void (^show)(NSArray *) = ^(NSArray *rows) {
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：3\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
@@ -215,7 +346,7 @@ NSArray<NSDictionary<NSString *, NSString *> *> *CampusOriginalProbeRun(
         NSArray *final = CampusOriginalProbeRun(manifest, root, ^(NSArray *rows) {
             dispatch_async(dispatch_get_main_queue(), ^{ show(rows); });
         });
-        dispatch_async(dispatch_get_main_queue(), ^{ self.finished = YES; show(final); });
+        dispatch_async(dispatch_get_main_queue(), ^{ self.finished = YES; self.network.enabled = YES; show(final); });
     });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 45 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
         if (!self.finished) self.report.text = [self.report.text stringByAppendingString:

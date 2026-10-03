@@ -1,14 +1,18 @@
 #import <Foundation/Foundation.h>
 #import <CommonCrypto/CommonDigest.h>
 #include <stdio.h>
+#import "OriginalNetworkProbe.h"
 
 NSArray *CampusOriginalProbeRun(NSDictionary *, NSString *, void (^)(NSArray *));
+void CampusOriginalNetworkProbeTests(void);
+NSURLRequest *CampusOriginalProbeTestRequest(NSDictionary *);
 @protocol ISecurityGuardOpenUnifiedSecurity <NSObject>
 @end
 static BOOL ProbeTestFailure;
 static NSUInteger ProbeTestKeyCalls, ProbeTestInitCalls, ProbeTestSignCalls, ProbeTestSignMode;
 static NSArray *ProbeTestPreviousFields;
 static NSString *ProbeTestPreviousRequest;
+static NSUInteger ProbeTestConfigSignCalls;
 
 static NSString *ResultForStep(NSArray *rows, NSString *step) {
     // 同一步会先追加“正在执行”，再追加最终结果；断言必须读取最后一条。
@@ -43,13 +47,22 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
     return !ProbeTestFailure;
 }
 - (NSDictionary *)getSecurityFactors:(NSDictionary *)parameters error:(NSError **)error {
+    BOOL config = [parameters[@"api"] isEqualToString:CampusOriginalConfigAPI];
     NSCAssert([parameters[@"appkey"] isEqualToString:@"TEST_APPKEY_MUST_NOT_APPEAR"] &&
-        [parameters[@"api"] isEqualToString:@"mtop.sys.newdeviceid"] &&
+        (config || [parameters[@"api"] isEqualToString:@"mtop.sys.newdeviceid"]) &&
         [parameters[@"useWua"] isEqual:@NO] && [parameters[@"env"] isEqual:@0] &&
         [parameters[@"extendParas"] isEqual:@{}], @"签名参数改变");
     NSArray *fields = [parameters[@"data"] componentsSeparatedByString:@"&"];
     NSCAssert(fields.count == 22 && [fields[3] isEqualToString:parameters[@"appkey"]] &&
         [fields[5] length] == 10 && [fields[4] length] == 32, @"MTOP 字段契约不符");
+    if (config) {
+        ProbeTestConfigSignCalls++;
+        NSCAssert([fields[4] isEqualToString:@"99914b932bd37a50b983c5e7c90ae93b"] &&
+            [fields[6] isEqualToString:CampusOriginalConfigAPI] && [fields[7] isEqualToString:@"1.0"] &&
+            [fields[9] isEqualToString:@"test@campus_iPhone_5.7.2"], @"匿名签名的空正文或 iOS TTID 不一致");
+        return @{@"x-sign": @"SECRET_CONFIG_SIGN+a/b=", @"x-mini-wua": @"SECRET_CONFIG_MINI",
+            @"x-umt": @"SECRET_CONFIG_UMT", @"x-sgext": @"SECRET_CONFIG_SGEXT"};
+    }
     if (ProbeTestSignCalls % 2 == 0) {
         ProbeTestPreviousFields = fields;
         ProbeTestPreviousRequest = parameters[@"requestId"];
@@ -91,6 +104,34 @@ static NSString *ResultForStep(NSArray *rows, NSString *step) {
 @interface SecurityGuardManager : OpenSecurityGuardManager
 @end
 @implementation SecurityGuardManager
+@end
+
+@interface UTDIDMain : NSObject
++ (NSString *)uniqueGlobalDeviceIdentifier;
+@end
+@implementation UTDIDMain
++ (NSString *)uniqueGlobalDeviceIdentifier { return @"AAAAAAAAAAAAAAAAAAAAAAAA"; }
+@end
+@interface AppInfo : NSObject
++ (NSString *)appKey;
++ (NSString *)channel;
++ (NSString *)bundleName;
++ (NSString *)version;
+@end
+@implementation AppInfo
++ (NSString *)appKey { return @"TEST_APPKEY_MUST_NOT_APPEAR"; }
++ (NSString *)channel { return @"test"; }
++ (NSString *)bundleName { return @"campus"; }
++ (NSString *)version { return @"5.7.2"; }
+@end
+@interface TBSDKMTOPEnvConfig : NSObject
++ (NSString *)urlEncodeString:(NSString *)value;
+@end
+@implementation TBSDKMTOPEnvConfig
++ (NSString *)urlEncodeString:(NSString *)value {
+    return [value stringByAddingPercentEncodingWithAllowedCharacters:
+        [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~"]];
+}
 @end
 
 int main(void) {
@@ -147,6 +188,12 @@ int main(void) {
         CampusOriginalProbeRun(@{}, root, nil);
         NSCAssert(ProbeTestInitCalls == calls, @"缺清单没有阻断 SDK");
         [[NSFileManager defaultManager] removeItemAtPath:root error:nil];
+        NSDictionary *context = @{@"appKey": @"TEST_APPKEY_MUST_NOT_APPEAR", @"unified": [[ProbeOriginalUnified alloc] init]};
+        NSURLRequest *configRequest = CampusOriginalProbeTestRequest(context);
+        NSCAssert(configRequest != nil && ProbeTestConfigSignCalls == 1, @"原设备与应用入口未能构造匿名候选请求");
+        NSCAssert([[configRequest valueForHTTPHeaderField:@"x-utdid"] isEqualToString:@"AAAAAAAAAAAAAAAAAAAAAAAA"] &&
+            [[[configRequest valueForHTTPHeaderField:@"x-ttid"] stringByRemovingPercentEncoding] isEqualToString:@"test@campus_iPhone_5.7.2"], @"设备标识或 TTID 与签名输入不同");
+        CampusOriginalNetworkProbeTests();
         puts("原配诊断原生桩测试通过；未执行厂商组件。");
     }
     return 0;
