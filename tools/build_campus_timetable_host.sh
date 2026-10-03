@@ -6,6 +6,7 @@ output=build/ios-timetable-host
 mkdir -p "$output/objects" "$output/resources"
 python3 -m unittest discover -s tools -p 'test_prepare_campus_timetable_host.py'
 bash tools/build_campus_original_probe.sh
+bash tools/test_campus_timetable_linker.sh
 xcrun --sdk macosx clang -fobjc-arc -fblocks \
   tools/ios-timetable-host/CampusTimetableModels.m tools/ios-timetable-host/CampusTimetableModelTests.m \
   -framework Foundation -framework CoreFoundation -o "$output/model-tests"
@@ -39,13 +40,21 @@ xcrun --sdk iphoneos swiftc -emit-library -module-name XhuCampusTimetableHost \
   iosApp/iosApp/LaundryNativeUi.swift iosApp/iosApp/LaundryAuthorizationViewController.swift \
   iosApp/iosApp/LaundryQrScannerViewController.swift "${objects[@]}" \
   -Xlinker -install_name -Xlinker '@executable_path/CampusOriginalProbe.dylib' -Xlinker -ObjC \
+  -Xlinker -dead_strip -Xlinker -exported_symbols_list -Xlinker tools/ios-timetable-host/exports.list \
   -framework Foundation -framework CoreFoundation -framework CoreGraphics -framework UIKit \
   -framework WebKit -framework AVFoundation -framework Metal -framework MetalKit \
   -framework QuartzCore -framework CoreText -framework Security -framework SystemConfiguration \
   -framework ImageIO -framework CoreVideo -framework CoreMedia -framework Accelerate -framework OpenGLES \
+  -Xlinker -map -Xlinker "$output/link-map.txt" \
   -lc++ -lsqlite3 -lz -o "$output/CampusOriginalProbe.dylib"
 xcrun nm -gU "$output/CampusOriginalProbe.dylib" > "$output/exports.txt"
 grep -q ' _CampusOriginalProbeMain$' "$output/exports.txt"
+# 导出白名单也是保留根：SDK 包装函数不作为动态库公开入口，真实调用依赖仍须解析。
+awk '{print $NF}' "$output/exports.txt" | LC_ALL=C sort > "$output/export-names.txt"
+LC_ALL=C sort tools/ios-timetable-host/exports.list > "$output/expected-export-names.txt"
+diff -u "$output/expected-export-names.txt" "$output/export-names.txt"
+xcrun nm -u "$output/CampusOriginalProbe.dylib" > "$output/imports.txt"
+# 保留链接图，若还有真实可达的不兼容符号，可从同一次构建定位引用来源。
 # 打包器只接受带校验清单的课表整合产物，防止误用旧诊断库。
 python3 tools/prepare_campus_timetable_host.py --create-artifact "$output" --output "$output/XhuCampusTimetableHost.zip"
 echo '课表原配整合产物已生成；下载 ZIP 后在本地与原 IPA 合成并递归重签。'

@@ -951,9 +951,9 @@ void CampusOriginalProbeRefreshRun(NSDictionary *context, void (^progress)(NSArr
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)options {
     self.window = [[UIWindow alloc] initWithFrame:UIScreen.mainScreen.bounds];
 #ifdef CAMPUS_TIMETABLE_HOST
-    Class host = NSClassFromString(@"XhuCampusTimetableHost");
-    SEL entry = NSSelectorFromString(@"makeViewController");
-    id root = [host respondsToSelector:entry] ? ((id (*)(id, SEL))objc_msgSend)(host, entry) : nil;
+    // Swift 以 passRetained 返回控制器；这里只转移一次所有权，窗口继续持有它。
+    extern void *CampusTimetableMakeViewController(void);
+    id root = CFBridgingRelease(CampusTimetableMakeViewController());
     if (![root isKindOfClass:UIViewController.class]) return NO;
     self.window.rootViewController = root;
 #else

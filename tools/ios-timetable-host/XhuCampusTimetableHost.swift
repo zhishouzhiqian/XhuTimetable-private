@@ -22,3 +22,9 @@ final class XhuCampusTimetableHost: NSObject, IosCampusBackend {
         }
     }
 }
+
+// 直接 C 引用让链接器保留真实启动路径；返回 +1 所有权，由 Objective-C 接管一次。
+@_cdecl("CampusTimetableMakeViewController")
+public func campusTimetableMakeViewController() -> UnsafeMutableRawPointer {
+    Unmanaged.passRetained(XhuCampusTimetableHost.makeViewController()).toOpaque()
+}

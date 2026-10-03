@@ -43,6 +43,9 @@ workflows:
     artifacts:
       - build/ios-timetable-host/XhuCampusTimetableHost.zip
       - build/ios-timetable-host/logs/*.log
+      - build/ios-timetable-host/link-map.txt
+      - build/ios-timetable-host/imports.txt
+      - build/ios-timetable-host/exports.txt
   ios-campus-original-probe:
     name: iOS 校园原配本地诊断库（未签名）
     instance_type: mac_mini_m2
