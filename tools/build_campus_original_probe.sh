@@ -20,8 +20,9 @@ xcrun --sdk iphoneos clang -fobjc-arc -fblocks -fvisibility=hidden -dynamiclib \
   tools/ios-original-probe/OriginalProbe.m tools/ios-original-probe/OriginalNetworkProbe.m \
   tools/ios-original-probe/OriginalDeviceProbe.m \
   tools/ios-original-probe/OriginalLoginProbe.m tools/ios-original-probe/OriginalAuthorizationView.m \
-  -framework Foundation -framework CoreFoundation -framework UIKit -framework WebKit \
+  -framework Foundation -framework CoreFoundation -framework CoreGraphics -framework UIKit -framework WebKit \
   -o "$output/CampusOriginalProbe.dylib"
 xcrun nm -gU "$output/CampusOriginalProbe.dylib" > "$output/exports.txt"
 grep -q ' _CampusOriginalProbeMain$' "$output/exports.txt"
 echo '原配诊断库已生成；需在本地原 IPA 副本中打包并递归重签。'
+
