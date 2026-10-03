@@ -10,41 +10,68 @@ static BOOL ProbeText(id value, NSUInteger maximum) {
         [value rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location == NSNotFound;
 }
 
-static NSString *ProbeEncode(NSString *value, NSString *(^encode)(NSString *)) {
+static NSString *ProbeEncode(NSString *value, NSString *(^encode)(NSString *), NSString *__autoreleasing *reason) {
     id encoded = encode(value);
-    if (!ProbeText(encoded, 65536)) return nil;
+    if (!ProbeText(encoded, 65536)) {
+        if (reason) *reason = @"编码入口返回空值、类型不符或超限";
+        return nil;
+    }
     NSCharacterSet *allowed = [NSCharacterSet characterSetWithCharactersInString:
         @"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~%"];
-    if ([encoded rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound ||
-        ![[encoded stringByRemovingPercentEncoding] isEqualToString:value]) return nil;
+    if ([encoded rangeOfCharacterFromSet:allowed.invertedSet].location != NSNotFound) {
+        if (reason) *reason = @"编码结果包含未转义的保留字符";
+        return nil;
+    }
+    if (![[encoded stringByRemovingPercentEncoding] isEqualToString:value]) {
+        if (reason) *reason = @"编码回读与原值不同（含非法转义或重复编码）";
+        return nil;
+    }
     return encoded;
 }
 
 NSURLRequest *CampusOriginalConfigRequest(NSString *appKey, NSString *utdid, NSString *ttid,
     NSString *time, NSDictionary *factors, NSString *(^encode)(NSString *)) {
-    if (!encode || !ProbeText(appKey, 128) || !ProbeText(utdid, 24) || utdid.length != 24 ||
-        [[NSData alloc] initWithBase64EncodedString:utdid options:0].length != 18 ||
-        !ProbeText(ttid, 256) || !ProbeText(time, 10) || time.length != 10 ||
-        [time rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet].location != NSNotFound ||
-        !CampusMtopProbeFactorsComplete(factors, nil)) return nil;
-    // 原编码入口使用 CFURLCreateStringByAddingPercentEscapes，强制编码此向量的 +/= %*。
-    // 不把 Java 的空格编码（+）或已经编码过的安全字段交给发送层。
-    id vector = encode(@"a+b/= %~*");
-    if (![vector isKindOfClass:NSString.class] || ![vector isEqualToString:@"a%2Bb%2F%3D%20%25~%2A"]) return nil;
+    return CampusOriginalConfigRequestChecked(appKey, utdid, ttid, time, factors, encode, NULL);
+}
+
+static NSURLRequest *ProbeReject(NSString *__autoreleasing *reason, NSString *message) {
+    if (reason) *reason = message;
+    return nil;
+}
+
+NSURLRequest *CampusOriginalConfigRequestChecked(NSString *appKey, NSString *utdid, NSString *ttid,
+    NSString *time, NSDictionary *factors, NSString *(^encode)(NSString *), NSString *__autoreleasing *reason) {
+    if (reason) *reason = nil;
+    if (!encode) return ProbeReject(reason, @"ENCODER_MISSING：编码入口缺失");
+    if (!ProbeText(appKey, 128)) return ProbeReject(reason, @"APPKEY_FORMAT：AppKey 类型、长度或控制字符不符");
+    if (!ProbeText(utdid, 24) || utdid.length != 24 ||
+        [[NSData alloc] initWithBase64EncodedString:utdid options:0].length != 18)
+        return ProbeReject(reason, @"UTDID_FORMAT：设备标识不符合 24 字符及 18 字节 Base64 契约");
+    if (!ProbeText(ttid, 256)) return ProbeReject(reason, @"TTID_FORMAT：应用标识类型、长度或控制字符不符");
+    if (!ProbeText(time, 10) || time.length != 10 ||
+        [time rangeOfCharacterFromSet:[NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet].location != NSNotFound)
+        return ProbeReject(reason, @"TIME_FORMAT：时间不是十位秒值");
+    if (!CampusMtopProbeFactorsComplete(factors, nil)) return ProbeReject(reason, @"FACTORS_INCOMPLETE：安全字段不完整");
+    // 核对转义及解码语义，不要求合法的 %7E 和 ~ 等表示与合成编码器逐字相同。
+    // 保留字符必须转义，回读必须完全一致；仍拒绝漏编码和重复编码。
+    NSString *encodingReason = nil;
+    if (!ProbeEncode(@"a+b/= %~*", encode, &encodingReason))
+        return ProbeReject(reason, [@"ENCODER_VECTOR：" stringByAppendingString:encodingReason]);
     NSMutableDictionary *raw = [@{@"x-appkey": appKey, @"x-utdid": utdid,
         @"x-ttid": ttid, @"x-t": time, @"x-pv": @"6.3"} mutableCopy];
     for (NSString *key in @[@"x-sign", @"x-mini-wua", @"x-umt", @"x-sgext"]) {
-        if (!ProbeText(factors[key], 16384)) return nil;
+        if (!ProbeText(factors[key], 16384)) return ProbeReject(reason,
+            [NSString stringWithFormat:@"FACTOR_FORMAT（%@）：类型、长度或控制字符不符", key]);
         raw[key] = factors[key];
     }
     NSMutableDictionary *headers = [NSMutableDictionary dictionary];
     for (NSString *key in raw) {
-        NSString *value = ProbeEncode(raw[key], encode);
-        if (!value) return nil;
+        NSString *value = ProbeEncode(raw[key], encode, &encodingReason);
+        if (!value) return ProbeReject(reason, [NSString stringWithFormat:@"HEADER_ENCODING（%@）：%@", key, encodingReason]);
         headers[key] = value;
     }
-    NSString *body = ProbeEncode(@"{}", encode);
-    if (!body) return nil;
+    NSString *body = ProbeEncode(@"{}", encode, &encodingReason);
+    if (!body) return ProbeReject(reason, [@"BODY_ENCODING：" stringByAppendingString:encodingReason]);
     NSURLComponents *components = [[NSURLComponents alloc] init];
     components.scheme = @"https";
     components.host = @"acs.m.taobao.com";
@@ -55,6 +82,7 @@ NSURLRequest *CampusOriginalConfigRequest(NSString *appKey, NSString *utdid, NSS
     request.HTTPMethod = @"GET";
     request.HTTPShouldHandleCookies = NO;
     request.allHTTPHeaderFields = headers;
+    if (!CampusOriginalConfigRequestInScope(request)) return ProbeReject(reason, @"WIRE_SCOPE：线路路径、空正文或头集合不符合范围");
     return [request copy];
 }
 

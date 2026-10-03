@@ -222,9 +222,11 @@ static NSURLRequest *ProbeAnonymousRequest(NSDictionary *context, void (^emit)(N
         emit(@"本次配置查询签名", error ? [NSString stringWithFormat:@"失败（SDK 错误码 %ld）；未发送", (long)error.code] :
             @"字段不完整；未发送"); return nil;
     }
-    NSURLRequest *request = CampusOriginalConfigRequest(networkKey, utdid, ttid, time, factors, encodeValue);
+    NSString *reason = nil;
+    NSURLRequest *request = CampusOriginalConfigRequestChecked(networkKey, utdid, ttid, time, factors, encodeValue, &reason);
     emit(@"设备上下文", @"使用原 UTDID 组件返回值；不展示；未据此认定新设备已注册");
-    emit(@"本次请求一致性", request ? @"固定空正文、时间及设备参数；四个字段完整；原编码入口核对通过" : @"编码或协议核对失败；未发送");
+    emit(@"本次请求一致性", request ? @"固定空正文、时间及设备参数；四个字段完整；原编码入口核对通过" :
+        [NSString stringWithFormat:@"%@；未发送", reason ?: @"构造失败；原因未提供"]);
     return request;
 }
 
@@ -290,7 +292,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     self.report = [[UITextView alloc] init];
     self.report.editable = NO;
     self.report.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    self.report.text = @"诊断版本：3\n当前运行专用 Application/AppDelegate\n\n离线检查：开启飞行模式并关闭 Wi-Fi。\n联网检查：先连接网络，再手动点击下方联网按钮，仅查询一次匿名公开配置，使用原设备标识但不展示，不登录、不注册设备、不下单。\n原二进制的类加载代码仍可能执行。\n\n每项检查每个进程只执行一次。";
+    self.report.text = @"诊断版本：4\n当前运行专用 Application/AppDelegate\n\n离线检查：开启飞行模式并关闭 Wi-Fi。\n联网检查：先连接网络，再手动点击下方联网按钮，仅查询一次匿名公开配置，使用原设备标识但不展示，不登录、不注册设备、不下单。\n原二进制的类加载代码仍可能执行。\n\n每项检查每个进程只执行一次。";
     [stack addArrangedSubview:self.report];
     self.start = [UIButton buttonWithType:UIButtonTypeSystem];
     [self.start setTitle:@"开始本地检查" forState:UIControlStateNormal];
@@ -314,7 +316,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：3\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：4\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };
@@ -338,7 +340,7 @@ void CampusOriginalProbeNetworkRun(NSDictionary *manifest, NSString *resourceRoo
     NSDictionary *manifest = [NSBundle.mainBundle objectForInfoDictionaryKey:@"CampusOriginalProbe"];
     NSString *root = NSBundle.mainBundle.bundlePath;
     void (^show)(NSArray *) = ^(NSArray *rows) {
-        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：3\n当前运行专用 Application/AppDelegate\n\n"];
+        NSMutableString *text = [NSMutableString stringWithString:@"诊断版本：4\n当前运行专用 Application/AppDelegate\n\n"];
         for (NSDictionary *row in rows) [text appendFormat:@"%@：%@\n\n", row[@"step"], row[@"result"]];
         self.report.text = text;
     };

@@ -1,4 +1,5 @@
 #import "OriginalNetworkProbe.h"
+#import <CoreFoundation/CoreFoundation.h>
 
 // 所有请求只在内存构造；发送测试只使用必须在建连前拒绝的请求。
 void CampusOriginalNetworkProbeTests(void) {
@@ -22,6 +23,36 @@ void CampusOriginalNetworkProbeTests(void) {
     NSCAssert(CampusOriginalConfigRequestInScope(request), @"合法请求被发送范围校验拒绝");
     NSString *expectedURL = [NSString stringWithFormat:@"https://acs.m.taobao.com%@?data=%%7B%%7D", expectedPath];
     NSCAssert([request.URL.absoluteString isEqualToString:expectedURL], @"实际 URL 丢失末尾斜杠或重复编码正文");
+    NSString *(^escapedTilde)(NSString *) = ^NSString *(NSString *value) {
+        return [encode(value) stringByReplacingOccurrencesOfString:@"~" withString:@"%7E"];
+    };
+    NSCAssert(CampusOriginalConfigRequest(@"test-key", utdid, ttid, @"1800000000", factors, escapedTilde) != nil,
+        @"等价的无保留字符编码被误拒绝");
+    NSString *(^originalCFEncode)(NSString *) = ^NSString *(NSString *value) {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+        CFStringRef result = CFURLCreateStringByAddingPercentEscapes(kCFAllocatorDefault,
+            (__bridge CFStringRef)value, NULL, CFSTR("!*'();:@&=+$,/?%#[]"), kCFStringEncodingUTF8);
+#pragma clang diagnostic pop
+        return CFBridgingRelease(result);
+    };
+    NSCAssert(CampusOriginalConfigRequest(@"test-key", utdid, ttid, @"1800000000", factors, originalCFEncode) != nil,
+        @"与原二进制相同参数的 CFURL 编码被拒绝");
+    NSString *reason = nil;
+    NSURLRequest *invalidDevice = CampusOriginalConfigRequestChecked(@"test-key", @"SECRET_BAD_DEVICE", ttid,
+        @"1800000000", factors, encode, &reason);
+    NSCAssert(invalidDevice == nil && [reason hasPrefix:@"UTDID_FORMAT"] && ![reason containsString:@"SECRET"], @"设备格式错误定位或脱敏失败");
+    NSString *(^identity)(NSString *) = ^NSString *(NSString *value) { return value; };
+    NSURLRequest *invalidEncoder = CampusOriginalConfigRequestChecked(@"test-key", utdid, ttid,
+        @"1800000000", factors, identity, &reason);
+    NSCAssert(invalidEncoder == nil && [reason hasPrefix:@"ENCODER_VECTOR"], @"保留字符未转义却通过校验");
+    NSString *(^wrongHeader)(NSString *) = ^NSString *(NSString *value) {
+        return [value isEqualToString:@"TEST_SIGN+a/b="] ? @"altered" : encode(value);
+    };
+    NSURLRequest *invalidHeader = CampusOriginalConfigRequestChecked(@"test-key", utdid, ttid,
+        @"1800000000", factors, wrongHeader, &reason);
+    NSCAssert(invalidHeader == nil && [reason containsString:@"HEADER_ENCODING（x-sign）"] && ![reason containsString:@"TEST_SIGN"],
+        @"具体头编码错误未定位或泄露字段值");
     NSCAssert(request.HTTPBody == nil && !request.HTTPShouldHandleCookies &&
         [request valueForHTTPHeaderField:@"Cookie"] == nil && [request valueForHTTPHeaderField:@"x-sid"] == nil &&
         [request valueForHTTPHeaderField:@"x-devid"] == nil, @"混入账号或旧注册状态");
