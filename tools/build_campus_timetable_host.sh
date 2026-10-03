@@ -5,6 +5,7 @@ cd "$(dirname "$0")/.."
 output=build/ios-timetable-host
 mkdir -p "$output/objects" "$output/resources"
 python3 -m unittest discover -s tools -p 'test_prepare_campus_timetable_host.py'
+python3 -m unittest discover -s tools -p 'test_slim_campus_timetable_host.py'
 bash tools/build_campus_original_probe.sh
 bash tools/test_campus_timetable_linker.sh
 xcrun --sdk macosx clang -fobjc-arc -fblocks \
